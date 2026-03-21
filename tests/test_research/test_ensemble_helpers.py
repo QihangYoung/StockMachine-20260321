@@ -29,6 +29,7 @@ def test_build_ensemble_prediction_frames_adds_mean_and_rank_blends() -> None:
     frames = {
         "hist_gbm": _prediction_frame(model="hist_gbm", scores=[2.0, -1.0]),
         "ridge": _prediction_frame(model="ridge", scores=[0.8, 0.1]),
+        "random_forest": _prediction_frame(model="random_forest", scores=[1.2, -0.2]),
     }
 
     ensemble_frames = build_ensemble_prediction_frames(frames)
@@ -37,6 +38,10 @@ def test_build_ensemble_prediction_frames_adds_mean_and_rank_blends() -> None:
     assert models == {
         "ensemble_hist_gbm_ridge_mean",
         "ensemble_hist_gbm_ridge_rank",
+        "ensemble_hist_gbm_random_forest_mean",
+        "ensemble_hist_gbm_random_forest_rank",
+        "ensemble_hist_gbm_ridge_random_forest_mean",
+        "ensemble_hist_gbm_ridge_random_forest_rank",
     }
     for frame in ensemble_frames:
         assert frame["symbol"].tolist() == ["AAPL", "MSFT"]

@@ -293,3 +293,17 @@ def test_parse_args_reads_sys_argv_when_not_explicit(monkeypatch) -> None:
     assert args.strategy_profile == "us_hist_gbm_ridge_mean_daily"
     assert args.model == "ensemble_hist_gbm_ridge_mean"
     assert args.run_name == "us-hist-gbm-ridge-mean-daily"
+
+
+def test_parse_args_supports_random_forest_rank_strategy_profile() -> None:
+    args = paper_daily.parse_args(
+        [
+            "run",
+            "--strategy-profile",
+            "us_hist_gbm_random_forest_rank_daily",
+        ]
+    )
+
+    assert args.strategy_profile == "us_hist_gbm_random_forest_rank_daily"
+    assert args.model == "ensemble_hist_gbm_random_forest_rank"
+    assert args.run_name == "us-hist-gbm-random-forest-rank-daily"

@@ -40,11 +40,35 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         task="cross_sectional_regression",
         description="Median-imputed and standardized ridge regression baseline.",
     ),
+    "huber_regression": AlphaExpertSpec(
+        name="huber_regression",
+        family="linear",
+        task="cross_sectional_regression",
+        description="Robust Huber regressor over the standardized baseline feature panel.",
+    ),
+    "elastic_net": AlphaExpertSpec(
+        name="elastic_net",
+        family="linear",
+        task="cross_sectional_regression",
+        description="ElasticNet baseline that adds sparse linear shrinkage over the feature panel.",
+    ),
     "hist_gbm": AlphaExpertSpec(
         name="hist_gbm",
         family="tree",
         task="cross_sectional_regression",
         description="Histogram gradient boosting regressor over the baseline feature panel.",
+    ),
+    "extra_trees": AlphaExpertSpec(
+        name="extra_trees",
+        family="tree",
+        task="cross_sectional_regression",
+        description="ExtraTrees regressor over the baseline feature panel for noisy tabular ranking.",
+    ),
+    "random_forest": AlphaExpertSpec(
+        name="random_forest",
+        family="tree",
+        task="cross_sectional_regression",
+        description="Random forest regressor over the baseline feature panel as a bagging benchmark.",
     ),
     "ensemble_hist_gbm_ridge_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_ridge_mean",
@@ -62,6 +86,38 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         components=("hist_gbm", "ridge"),
         combine_method="rank_average",
     ),
+    "ensemble_hist_gbm_random_forest_mean": AlphaExpertSpec(
+        name="ensemble_hist_gbm_random_forest_mean",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Mean blend of hist_gbm and random_forest expert scores.",
+        components=("hist_gbm", "random_forest"),
+        combine_method="mean_score",
+    ),
+    "ensemble_hist_gbm_random_forest_rank": AlphaExpertSpec(
+        name="ensemble_hist_gbm_random_forest_rank",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Rank-average blend of hist_gbm and random_forest expert predictions.",
+        components=("hist_gbm", "random_forest"),
+        combine_method="rank_average",
+    ),
+    "ensemble_hist_gbm_ridge_random_forest_mean": AlphaExpertSpec(
+        name="ensemble_hist_gbm_ridge_random_forest_mean",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Mean blend of hist_gbm, ridge, and random_forest expert scores.",
+        components=("hist_gbm", "ridge", "random_forest"),
+        combine_method="mean_score",
+    ),
+    "ensemble_hist_gbm_ridge_random_forest_rank": AlphaExpertSpec(
+        name="ensemble_hist_gbm_ridge_random_forest_rank",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Rank-average blend of hist_gbm, ridge, and random_forest expert predictions.",
+        components=("hist_gbm", "ridge", "random_forest"),
+        combine_method="rank_average",
+    ),
 }
 
 
@@ -71,9 +127,17 @@ def list_alpha_experts() -> tuple[AlphaExpertSpec, ...]:
     ordered_names = (
         "factor_baseline",
         "ridge",
+        "huber_regression",
+        "elastic_net",
         "hist_gbm",
+        "extra_trees",
+        "random_forest",
         "ensemble_hist_gbm_ridge_mean",
         "ensemble_hist_gbm_ridge_rank",
+        "ensemble_hist_gbm_random_forest_mean",
+        "ensemble_hist_gbm_random_forest_rank",
+        "ensemble_hist_gbm_ridge_random_forest_mean",
+        "ensemble_hist_gbm_ridge_random_forest_rank",
     )
     return tuple(_ALPHA_EXPERT_SPECS[name] for name in ordered_names)
 

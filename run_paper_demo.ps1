@@ -1,5 +1,5 @@
 param(
-    [string]$Profile = "us_hist_gbm_ridge_rank_daily",
+    [string]$Profile = "us_hist_gbm_random_forest_rank_daily",
     [string]$SessionDate = (Get-Date -Format "yyyy-MM-dd"),
     [string]$LedgerPath = "artifacts/paper_demo/paper_ledger.sqlite3",
     [string]$ArtifactRoot = "artifacts",

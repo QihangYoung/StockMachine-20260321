@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import ExtraTreesRegressor, HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import ElasticNet, HuberRegressor, Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from stockmachine.alpha import get_alpha_expert, list_alpha_expert_names
+from stockmachine.alpha import get_alpha_expert, list_alpha_expert_names, list_alpha_experts
 from stockmachine.backtest import DailyOpenHoldBacktestEngine, DataFrameSignalModel
 from stockmachine.data.loaders import load_us_equities_dataset
 from stockmachine.execution import NextOpenOrderExecutionPolicy
@@ -51,7 +52,9 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "rel_mom_20",
     "rel_mom_60",
 )
-BASE_MODEL_NAMES: tuple[str, ...] = ("factor_baseline", "ridge", "hist_gbm")
+BASE_MODEL_NAMES: tuple[str, ...] = tuple(
+    spec.name for spec in list_alpha_experts() if not spec.components
+)
 MODEL_NAMES: tuple[str, ...] = list_alpha_expert_names()
 
 
@@ -671,19 +674,12 @@ def generate_walk_forward_predictions(
             continue
 
         month_prediction_frames: dict[str, pd.DataFrame] = {}
-
-        factor_scores = compute_factor_scores(test_frame)
-        month_prediction_frames["factor_baseline"] = _assemble_predictions(test_frame, factor_scores, "factor_baseline")
-
-        ridge_model = build_ridge_pipeline()
-        ridge_model.fit(train_frame[list(FEATURE_COLUMNS)], train_frame["target"])
-        ridge_scores = ridge_model.predict(test_frame[list(FEATURE_COLUMNS)])
-        month_prediction_frames["ridge"] = _assemble_predictions(test_frame, ridge_scores, "ridge")
-
-        tree_model = build_hist_gbm_model()
-        tree_model.fit(train_frame[list(FEATURE_COLUMNS)], train_frame["target"])
-        tree_scores = tree_model.predict(test_frame[list(FEATURE_COLUMNS)])
-        month_prediction_frames["hist_gbm"] = _assemble_predictions(test_frame, tree_scores, "hist_gbm")
+        for model_name in BASE_MODEL_NAMES:
+            month_prediction_frames[model_name] = fit_predict_base_model(
+                model_name,
+                train_frame=train_frame,
+                test_frame=test_frame,
+            )
 
         prediction_frames.extend(month_prediction_frames.values())
         prediction_frames.extend(build_ensemble_prediction_frames(month_prediction_frames))
@@ -716,10 +712,10 @@ def build_ensemble_prediction_frames(
     return ensemble_frames
 
 
-def build_ridge_pipeline() -> Pipeline:
-    """Construct the linear baseline model."""
+def build_numeric_linear_preprocessor() -> ColumnTransformer:
+    """Construct the shared preprocessing stack for linear baseline models."""
 
-    preprocessor = ColumnTransformer(
+    return ColumnTransformer(
         transformers=[
             (
                 "numeric",
@@ -734,27 +730,151 @@ def build_ridge_pipeline() -> Pipeline:
         ],
         remainder="drop",
     )
-    return Pipeline(steps=[("preprocessor", preprocessor), ("model", Ridge(alpha=1.0))])
+
+
+def build_linear_model_pipeline(model: object) -> Pipeline:
+    """Wrap one linear model with the shared preprocessing pipeline."""
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", build_numeric_linear_preprocessor()),
+            ("model", model),
+        ]
+    )
+
+
+def build_tree_model_pipeline(model: object) -> Pipeline:
+    """Wrap one tree model with median imputation for the tabular feature panel."""
+
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("model", model),
+        ]
+    )
+
+
+def build_ridge_pipeline() -> Pipeline:
+    """Construct the linear baseline model."""
+
+    return build_linear_model_pipeline(Ridge(alpha=1.0))
+
+
+def build_huber_pipeline() -> Pipeline:
+    """Construct a robust linear baseline for heavy-tailed return labels."""
+
+    return build_linear_model_pipeline(
+        HuberRegressor(
+            alpha=0.0001,
+            epsilon=1.5,
+            max_iter=300,
+            tol=1e-5,
+        )
+    )
+
+
+def build_elastic_net_pipeline() -> Pipeline:
+    """Construct a sparse linear baseline over the standardized feature panel."""
+
+    return build_linear_model_pipeline(
+        ElasticNet(
+            alpha=0.001,
+            l1_ratio=0.15,
+            max_iter=5000,
+            selection="cyclic",
+            tol=1e-4,
+        )
+    )
 
 
 def build_hist_gbm_model() -> Pipeline:
     """Construct the tree-based baseline model."""
 
-    return Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            (
-                "model",
-                HistGradientBoostingRegressor(
-                    learning_rate=0.05,
-                    max_depth=4,
-                    max_iter=200,
-                    min_samples_leaf=40,
-                    random_state=7,
-                ),
-            ),
-        ]
+    return build_tree_model_pipeline(
+        HistGradientBoostingRegressor(
+            learning_rate=0.05,
+            max_depth=4,
+            max_iter=200,
+            min_samples_leaf=40,
+            random_state=7,
+        )
     )
+
+
+def build_extra_trees_model() -> Pipeline:
+    """Construct a bagging-style tree model for noisy cross-sectional ranking."""
+
+    return build_tree_model_pipeline(
+        ExtraTreesRegressor(
+            bootstrap=False,
+            max_depth=8,
+            max_features="sqrt",
+            min_samples_leaf=40,
+            n_estimators=400,
+            n_jobs=-1,
+            random_state=7,
+        )
+    )
+
+
+def build_random_forest_model() -> Pipeline:
+    """Construct a conservative bagging tree baseline."""
+
+    return build_tree_model_pipeline(
+        RandomForestRegressor(
+            bootstrap=True,
+            max_depth=6,
+            max_features="sqrt",
+            min_samples_leaf=40,
+            n_estimators=300,
+            n_jobs=-1,
+            random_state=7,
+        )
+    )
+
+
+def get_trainable_model_builder(name: str) -> Callable[[], Pipeline]:
+    """Resolve one trainable baseline model builder."""
+
+    builders: dict[str, Callable[[], Pipeline]] = {
+        "ridge": build_ridge_pipeline,
+        "huber_regression": build_huber_pipeline,
+        "elastic_net": build_elastic_net_pipeline,
+        "hist_gbm": build_hist_gbm_model,
+        "extra_trees": build_extra_trees_model,
+        "random_forest": build_random_forest_model,
+    }
+    try:
+        return builders[name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported trainable base model '{name}'.") from exc
+
+
+def score_factor_model(name: str, frame: pd.DataFrame) -> np.ndarray:
+    """Score one non-trainable baseline expert."""
+
+    if name == "factor_baseline":
+        return compute_factor_scores(frame)
+    raise ValueError(f"Unsupported factor-style base model '{name}'.")
+
+
+def fit_predict_base_model(
+    name: str,
+    *,
+    train_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Fit one base model on the rolling window and emit the prediction frame."""
+
+    if name == "factor_baseline":
+        scores = score_factor_model(name, test_frame)
+        return _assemble_predictions(test_frame, scores, name)
+
+    builder = get_trainable_model_builder(name)
+    model = builder()
+    model.fit(train_frame[list(FEATURE_COLUMNS)], train_frame["target"])
+    scores = model.predict(test_frame[list(FEATURE_COLUMNS)])
+    return _assemble_predictions(test_frame, scores, name)
 
 
 def compute_factor_scores(frame: pd.DataFrame) -> np.ndarray:

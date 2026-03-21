@@ -13,14 +13,33 @@ def test_alpha_registry_lists_supported_baselines() -> None:
     assert list_alpha_expert_names() == (
         "factor_baseline",
         "ridge",
+        "huber_regression",
+        "elastic_net",
         "hist_gbm",
+        "extra_trees",
+        "random_forest",
         "ensemble_hist_gbm_ridge_mean",
         "ensemble_hist_gbm_ridge_rank",
+        "ensemble_hist_gbm_random_forest_mean",
+        "ensemble_hist_gbm_random_forest_rank",
+        "ensemble_hist_gbm_ridge_random_forest_mean",
+        "ensemble_hist_gbm_ridge_random_forest_rank",
     )
     assert get_alpha_expert("hist_gbm").family == "tree"
     assert get_alpha_expert("ridge").task == "cross_sectional_regression"
+    assert get_alpha_expert("huber_regression").family == "linear"
+    assert get_alpha_expert("extra_trees").family == "tree"
     assert get_alpha_expert("ensemble_hist_gbm_ridge_mean").components == ("hist_gbm", "ridge")
     assert get_alpha_expert("ensemble_hist_gbm_ridge_rank").combine_method == "rank_average"
+    assert get_alpha_expert("ensemble_hist_gbm_random_forest_mean").components == (
+        "hist_gbm",
+        "random_forest",
+    )
+    assert get_alpha_expert("ensemble_hist_gbm_ridge_random_forest_rank").components == (
+        "hist_gbm",
+        "ridge",
+        "random_forest",
+    )
 
 
 def test_alpha_registry_rejects_unknown_expert() -> None:
