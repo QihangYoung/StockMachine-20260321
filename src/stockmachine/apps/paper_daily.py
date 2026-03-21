@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from stockmachine.alpha import list_alpha_expert_names
+from stockmachine.apps.paper_profiles import load_strategy_profile
 from stockmachine.apps.run_us_equities_paper import (
     PaperRunConfig,
     build_alpaca_paper_runner,
@@ -78,17 +81,18 @@ class PaperDailyOperationPayload:
         return payload
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
+def build_arg_parser(*, run_defaults: Mapping[str, Any] | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scheduler-friendly daily operations shell for the paper demo.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run", help="Run the daily paper workflow.")
+    run_parser.add_argument("--strategy-profile", default=None, help="Built-in strategy profile name or JSON path.")
     run_parser.add_argument("--session-date", default=date.today().isoformat())
     run_parser.add_argument("--universe", nargs="*", default=[])
     run_parser.add_argument("--run-name", default="paper-demo")
     run_parser.add_argument("--execute", action="store_true")
     run_parser.add_argument("--demo-mode", action="store_true")
-    run_parser.add_argument("--model", default="hist_gbm")
+    run_parser.add_argument("--model", default="hist_gbm", choices=list_alpha_expert_names())
     run_parser.add_argument("--top-k", type=int, default=10)
     run_parser.add_argument("--horizon", type=int, default=5)
     run_parser.add_argument("--data-root", default="data")
@@ -110,11 +114,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--kill-switch-path", default=str(DEFAULT_KILL_SWITCH_PATH))
     run_parser.add_argument("--artifact-root", default="artifacts")
     run_parser.add_argument("--artifact-dir", default=None, help="Optional research/backtest artifact dir for post-run reconciliation.")
+    if run_defaults:
+        run_parser.set_defaults(**dict(run_defaults))
 
     health_parser = subparsers.add_parser("healthcheck", help="Inspect ledger health for daily operations.")
     health_parser.add_argument("--ledger-path", default="artifacts/paper_demo/paper_ledger.sqlite3")
 
     return parser
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    run_defaults: dict[str, Any] = {}
+    if raw_args[:1] == ["run"]:
+        profile_ref = _extract_flag_value(raw_args, "--strategy-profile")
+        if profile_ref:
+            profile = load_strategy_profile(profile_ref)
+            run_defaults = profile.to_arg_defaults()
+    parser = build_arg_parser(run_defaults=run_defaults)
+    return parser.parse_args(raw_args)
+
+
+def _extract_flag_value(argv: Sequence[str], flag: str) -> str | None:
+    for index, token in enumerate(argv):
+        if token == flag and index + 1 < len(argv):
+            return argv[index + 1]
+        prefix = f"{flag}="
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return None
 
 
 def run_command(args: argparse.Namespace) -> dict[str, Any]:
@@ -216,6 +244,8 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         )
         if resolved_artifact_dir is not None:
             payload.summary["artifact_dir"] = resolved_artifact_dir
+        if getattr(args, "strategy_profile", None) is not None:
+            payload.summary["strategy_profile"] = str(args.strategy_profile)
         return payload.to_dict()
     except Exception as exc:
         payload = PaperDailyOperationPayload(
@@ -416,8 +446,7 @@ def _compact_daily_summary_payload(payload: Mapping[str, Any]) -> dict[str, Any]
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
     if args.command == "run":
         payload = run_command(args)
     elif args.command == "healthcheck":

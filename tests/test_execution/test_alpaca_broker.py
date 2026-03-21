@@ -4,7 +4,13 @@ import json
 from datetime import datetime
 
 from stockmachine.data.vendors.alpaca import AlpacaCredentials
-from stockmachine.execution.brokers import AlpacaTradingAdapter
+from stockmachine.execution.brokers import (
+    AlpacaTradingAdapter,
+    AlpacaBrokerError,
+    classify_buy_retry_reason,
+    is_retryable_buy_rejection,
+    shrink_quantity_for_retry,
+)
 
 
 class _FakeResponse:
@@ -212,3 +218,17 @@ def test_alpaca_trading_adapter_detects_paper_environment() -> None:
 
     assert paper_adapter.is_paper_trading_environment() is True
     assert live_adapter.is_paper_trading_environment() is False
+
+
+def test_retryable_buy_rejection_helpers_classify_buying_power_and_notional() -> None:
+    assert is_retryable_buy_rejection(AlpacaBrokerError("HTTP 422: insufficient buying power"), side="buy")
+    assert classify_buy_retry_reason(AlpacaBrokerError("HTTP 422: insufficient buying power")) == "insufficient_buying_power"
+    assert classify_buy_retry_reason(AlpacaBrokerError("HTTP 422: order notional exceeds limit")) == "order_notional_exceeded"
+    assert not is_retryable_buy_rejection(AlpacaBrokerError("HTTP 422: insufficient buying power"), side="sell")
+    assert not is_retryable_buy_rejection(AlpacaBrokerError("HTTP 400: other error"), side="buy")
+
+
+def test_shrink_quantity_for_retry_reduces_size_once() -> None:
+    assert shrink_quantity_for_retry(10) == 5
+    assert shrink_quantity_for_retry(3) == 1
+    assert shrink_quantity_for_retry(1) == 0

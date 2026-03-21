@@ -160,10 +160,12 @@ Execute mode is available, but it will place orders into the Alpaca paper accoun
 Operator inspection commands:
 
 ```text
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --strategy-profile us_hist_gbm_daily --artifact-root artifacts
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --session-date 2026-03-22 --model hist_gbm --run-name stable-smoke --artifact-root artifacts
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops latest-run
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops open-orders
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily healthcheck
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --strategy-profile us_hist_gbm_daily --session-date 2026-03-22 --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --session-date 2026-03-22 --model hist_gbm --run-name stable-daily-demo --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2 --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_reconcile latest-run --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_maintain latest-run --broker-orders-json path/to/open_orders.json --stale-after-minutes 60
@@ -182,5 +184,17 @@ The daily runner also supports a filesystem kill switch at
 auto-discovers a likely research/backtest artifact directory, runs the same
 preflight path as `paper_daily`, and returns the recommended follow-up
 commands for reconcile and maintenance.
+
+Built-in paper strategy profiles now live under
+[`configs/strategies`](/E:/CodeX/StockMachine-260321/configs/strategies). The
+first low-risk migration set includes:
+
+- `us_hist_gbm_daily`
+- `us_ridge_daily`
+- `us_hist_gbm_ridge_mean_daily`
+- `us_hist_gbm_ridge_rank_daily`
+
+Profiles provide default model and risk parameters, while CLI flags still
+override them when needed.
 
 The current productization plan lives in [docs/paper-productization-plan.md](/E:/CodeX/StockMachine-260321/docs/paper-productization-plan.md).

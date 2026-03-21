@@ -247,6 +247,46 @@ class AlpacaTradingAdapter:
         raise AlpacaBrokerError("Alpaca trading request failed without a captured error.")
 
 
+_BUY_RETRY_KEYWORDS = (
+    "insufficient buying power",
+    "buying power",
+    "insufficient funds",
+    "notional",
+    "order notional",
+)
+
+
+def is_retryable_buy_rejection(error: Exception, *, side: str) -> bool:
+    """Return True when a buy order rejection looks shrinkable and worth one retry."""
+
+    if str(side).upper() != "BUY":
+        return False
+    return classify_buy_retry_reason(error) is not None
+
+
+def classify_buy_retry_reason(error: Exception) -> str | None:
+    """Map a broker rejection into a retry reason when shrinking might help."""
+
+    message = str(error).lower()
+    if "insufficient buying power" in message or "buying power" in message or "insufficient funds" in message:
+        return "insufficient_buying_power"
+    if "order notional" in message or "notional" in message:
+        return "order_notional_exceeded"
+    return None
+
+
+def shrink_quantity_for_retry(quantity: int, *, shrink_ratio: float = 0.5) -> int:
+    """Shrink a quantity for a single buy retry while keeping at least one share."""
+
+    if quantity <= 1:
+        return 0
+    ratio = min(max(float(shrink_ratio), 0.0), 1.0)
+    shrunk = int(quantity * ratio)
+    if shrunk >= quantity:
+        shrunk = quantity - 1
+    return max(1, shrunk)
+
+
 def _parse_account(payload: dict[str, Any]) -> BrokerAccount:
     return BrokerAccount(
         account_id=str(payload.get("id", "")),

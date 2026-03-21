@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from stockmachine.apps.run_us_equities_paper import (
+    AlpacaOrderSubmitter,
     PaperRunConfig,
     PaperRunDependencies,
     PaperRunner,
@@ -15,6 +16,7 @@ from stockmachine.apps.run_us_equities_paper import (
 )
 from stockmachine.backtest.protocols import AccountSnapshot, MarketBar
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
+from stockmachine.execution.brokers import AlpacaBrokerError
 from stockmachine.live import PollingOrderReconciler
 from stockmachine.live.trade_updates import TradeUpdateMessageSource
 from stockmachine.risk import validate_client_order_id
@@ -231,6 +233,31 @@ class _AcceptedOrderSubmitter:
 
 
 @dataclass(slots=True)
+class _RetryingBroker:
+    attempts: int = 0
+
+    def submit_order(self, *, symbol, side, quantity, order_type, time_in_force, limit_price=None, client_order_id=None):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise AlpacaBrokerError("HTTP 422: insufficient buying power")
+        return {
+            "id": "ord-retry-001",
+            "client_order_id": client_order_id,
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": str(int(quantity)),
+            "filled_qty": "0",
+            "type": order_type,
+            "time_in_force": time_in_force,
+            "filled_avg_price": None,
+            "limit_price": limit_price,
+            "submitted_at": "2026-03-22T01:00:00+00:00",
+            "updated_at": "2026-03-22T01:00:00+00:00",
+        }
+
+
+@dataclass(slots=True)
 class _TransitioningOrderStatusProvider:
     states: list[dict[str, object]]
     index: int = 0
@@ -316,6 +343,47 @@ def test_runner_execute_path_records_orders_and_fills(tmp_path) -> None:
     assert fill_audits[0].run_id == payload["run_id"]
     assert fill_audits[0].expected_price == 100.0
     assert fill_audits[0].slippage == 0.25
+
+
+def test_runner_records_submission_retry_metadata_on_buy_rejection(tmp_path) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    broker = _RetryingBroker()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            market_data_provider=_OneMarketDataProvider(),
+            order_submitter=AlpacaOrderSubmitter(broker),
+            ledger=ledger,
+            reconciler=PollingOrderReconciler(ledger),
+        )
+    )
+    config = PaperRunConfig(
+        session_date=date(2026, 3, 22),
+        dry_run=False,
+        universe=("AAPL",),
+        run_name="retry-test",
+        execution_equity_cap=500.0,
+    )
+
+    report = runner.run(config)
+    payload = report.to_dict()
+    order = ledger.get_order("ord-retry-001")
+
+    assert broker.attempts == 2
+    assert payload["status"] == "success"
+    assert payload["meta"]["submission_retry"]["attempted_orders"] == 1
+    assert payload["meta"]["submission_retry"]["submitted_orders"] == 1
+    assert payload["meta"]["submission_retry"]["retried_orders"] == 1
+    assert payload["meta"]["submission_retry"]["records"][0]["retry_used"] is True
+    assert payload["meta"]["submission_retry"]["records"][0]["initial_error"] == "HTTP 422: insufficient buying power"
+    assert payload["meta"]["submission_retry"]["records"][0]["final_quantity"] == 2
+    assert order is not None
+    assert order.quantity == 2
 
 
 def test_runner_dry_run_serializes_account_sync_payloads(tmp_path) -> None:

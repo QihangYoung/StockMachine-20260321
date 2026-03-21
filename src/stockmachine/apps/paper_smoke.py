@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.apps import paper_daily
+from stockmachine.apps.paper_profiles import load_strategy_profile
 from stockmachine.apps.run_us_equities_paper import parse_session_date
 from stockmachine.monitoring.reports import build_paper_artifact_link
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a repeatable paper smoke harness and emit JSON.")
+    parser.add_argument("--strategy-profile", default=None, help="Built-in strategy profile name or JSON path.")
     parser.add_argument("--session-date", default=date.today().isoformat())
     parser.add_argument("--run-name", default="paper-smoke")
-    parser.add_argument("--model", default="hist_gbm")
+    parser.add_argument("--model", default="hist_gbm", choices=list_alpha_expert_names())
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--data-root", default="data")
@@ -41,6 +45,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-unhealthy", action="store_true")
     parser.add_argument("--kill-switch-path", default=None)
     return parser
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    profile_ref = _extract_flag_value(raw_args, "--strategy-profile")
+    parser = build_arg_parser()
+    if profile_ref:
+        profile = load_strategy_profile(profile_ref)
+        parser.set_defaults(**profile.to_arg_defaults())
+    return parser.parse_args(raw_args)
+
+
+def _extract_flag_value(argv: Sequence[str], flag: str) -> str | None:
+    for index, token in enumerate(argv):
+        if token == flag and index + 1 < len(argv):
+            return argv[index + 1]
+        prefix = f"{flag}="
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return None
 
 
 def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -92,6 +116,7 @@ def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
         "ok": bool(run_payload.get("ok")) if isinstance(run_payload, Mapping) else False,
         "session_date": session_date.isoformat(),
         "run_name": args.run_name,
+        "strategy_profile": getattr(args, "strategy_profile", None),
         "model": args.model,
         "dry_run": not args.execute,
         "artifact_link": artifact_link.to_dict(),
@@ -125,6 +150,7 @@ def _build_run_namespace(
         execute=args.execute,
         demo_mode=args.demo_mode,
         model=args.model,
+        strategy_profile=getattr(args, "strategy_profile", None),
         top_k=args.top_k,
         horizon=args.horizon,
         data_root=args.data_root,
@@ -181,6 +207,8 @@ def _build_recommended_commands(
         daily_command.append("--execute")
     if args.demo_mode:
         daily_command.append("--demo-mode")
+    if args.strategy_profile:
+        daily_command.extend(["--strategy-profile", str(args.strategy_profile)])
     if args.universe:
         daily_command.extend(["--universe", *list(args.universe)])
     if args.artifact_dir is not None or artifact_link.artifact_dir is not None:
@@ -227,8 +255,7 @@ def _guardrails_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
     payload = build_smoke_payload(args)
     print(json.dumps(payload, indent=2, sort_keys=True, default=_json_default))
     return 0

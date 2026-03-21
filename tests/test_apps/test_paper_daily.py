@@ -262,3 +262,34 @@ def test_healthcheck_command_uses_helper(monkeypatch) -> None:
     assert payload["ok"] is True
     assert payload["preflight"]["ledger_path"] == "artifacts/paper_demo/paper_ledger.sqlite3"
     assert payload["summary"]["healthy"] is True
+
+
+def test_parse_args_applies_strategy_profile_defaults_and_allows_cli_override() -> None:
+    args = paper_daily.parse_args(
+        [
+            "run",
+            "--strategy-profile",
+            "us_hist_gbm_daily",
+            "--top-k",
+            "3",
+        ]
+    )
+
+    assert args.strategy_profile == "us_hist_gbm_daily"
+    assert args.run_name == "us-hist-gbm-daily"
+    assert args.model == "hist_gbm"
+    assert args.top_k == 3
+    assert args.horizon == 5
+
+
+def test_parse_args_reads_sys_argv_when_not_explicit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["paper_daily", "run", "--strategy-profile", "us_hist_gbm_ridge_mean_daily"],
+    )
+
+    args = paper_daily.parse_args()
+
+    assert args.strategy_profile == "us_hist_gbm_ridge_mean_daily"
+    assert args.model == "ensemble_hist_gbm_ridge_mean"
+    assert args.run_name == "us-hist-gbm-ridge-mean-daily"

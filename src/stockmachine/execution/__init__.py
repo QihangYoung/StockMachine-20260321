@@ -1,6 +1,15 @@
 """Execution planning and broker integration."""
 
-from .models import BrokerAccount, BrokerClock, BrokerOrder, BrokerPosition, ExecutionReport, FillEvent
+from .models import (
+    BrokerAccount,
+    BrokerClock,
+    BrokerOrder,
+    BrokerPosition,
+    ExecutionReport,
+    FillEvent,
+    SubmissionRetryRecord,
+    SubmissionRetryReport,
+)
 from .policies import NextOpenOrderExecutionPolicy
 from .protocols import BrokerAdapter
 
@@ -12,5 +21,7 @@ __all__ = [
     "BrokerPosition",
     "ExecutionReport",
     "FillEvent",
+    "SubmissionRetryRecord",
+    "SubmissionRetryReport",
     "NextOpenOrderExecutionPolicy",
 ]

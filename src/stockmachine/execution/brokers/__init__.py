@@ -7,6 +7,9 @@ from .alpaca import (
     BrokerClock,
     BrokerOrder,
     BrokerPosition,
+    classify_buy_retry_reason,
+    is_retryable_buy_rejection,
+    shrink_quantity_for_retry,
 )
 from .alpaca_stream import AlpacaStreamError, AlpacaTradeUpdateStream, AlpacaWebSocketConnection
 
@@ -20,4 +23,7 @@ __all__ = [
     "BrokerClock",
     "BrokerOrder",
     "BrokerPosition",
+    "classify_buy_retry_reason",
+    "is_retryable_buy_rejection",
+    "shrink_quantity_for_retry",
 ]

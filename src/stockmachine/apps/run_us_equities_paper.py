@@ -14,11 +14,14 @@ from uuid import uuid4
 
 import pandas as pd
 
+from stockmachine.alpha import assert_supported_alpha_expert, list_alpha_expert_names
 from stockmachine.backtest.protocols import AccountSnapshot, ExecutionPolicy, MarketBar, PortfolioPolicy, SignalModel
 from stockmachine.data.loaders import load_us_equities_dataset
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
 from stockmachine.execution import NextOpenOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaTradeUpdateStream, AlpacaTradingAdapter
+from stockmachine.execution.brokers import classify_buy_retry_reason, is_retryable_buy_rejection, shrink_quantity_for_retry
+from stockmachine.execution.models import SubmissionRetryRecord, SubmissionRetryReport
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.live import (
     AccountSyncResult,
@@ -272,6 +275,9 @@ class SilverWalkForwardSignalModel:
     model_name: str = "hist_gbm"
     horizon_bars: int = 5
 
+    def __post_init__(self) -> None:
+        self.model_name = assert_supported_alpha_expert(self.model_name)
+
     def predict(self, session_date: date, universe: Sequence[str]) -> Sequence[Signal]:
         dataset = self.dataset_cache.load()
         effective_date = self.dataset_cache.resolve_session_date(session_date)
@@ -345,23 +351,110 @@ class SyncedAccountProvider:
 @dataclass(slots=True)
 class AlpacaOrderSubmitter:
     broker: AlpacaTradingAdapter
+    retry_shrink_ratio: float = 0.5
+    last_submission_report: SubmissionRetryReport | None = field(default=None, init=False, repr=False)
 
     def submit_orders(self, orders: Sequence[OrderIntent]) -> Sequence[Mapping[str, Any] | object]:
         submitted = []
+        records: list[SubmissionRetryRecord] = []
+        attempted_orders = 0
+        failed_orders = 0
+        self.last_submission_report = SubmissionRetryReport(
+            attempted_orders=len(orders),
+            submitted_orders=0,
+            retried_orders=0,
+            failed_orders=0,
+            records=(),
+        )
         for order in orders:
-            order_type, time_in_force = self._map_order_type(order)
-            submitted.append(
-                self.broker.submit_order(
-                    symbol=order.symbol,
-                    side=order.side.lower(),
-                    quantity=float(order.quantity),
+            attempted_orders += 1
+            try:
+                broker_order, record = self._submit_one(order)
+            except Exception as exc:
+                failed_orders += 1
+                records.append(self._build_failure_record(order, exc))
+                self.last_submission_report = self._build_submission_report(
+                    records=records,
+                    attempted_orders=attempted_orders,
+                    submitted_orders=len(submitted),
+                    failed_orders=failed_orders,
+                )
+                raise
+            submitted.append(broker_order)
+            records.append(record)
+        self.last_submission_report = self._build_submission_report(
+            records=records,
+            attempted_orders=attempted_orders,
+            submitted_orders=len(submitted),
+            failed_orders=failed_orders,
+        )
+        return tuple(submitted)
+
+    def _submit_one(self, order: OrderIntent) -> tuple[Mapping[str, Any] | object, SubmissionRetryRecord]:
+        order_type, time_in_force = self._map_order_type(order)
+        original_quantity = int(order.quantity)
+        initial_notional = self._estimate_order_notional(order)
+        client_order_id = order.meta.get("client_order_id") if isinstance(order.meta, dict) else None
+
+        try:
+            submitted = self.broker.submit_order(
+                symbol=order.symbol,
+                side=order.side.lower(),
+                quantity=float(order.quantity),
+                order_type=order_type,
+                time_in_force=time_in_force,
+                limit_price=order.limit_price,
+                client_order_id=client_order_id,
+            )
+            return submitted, self._build_success_record(
+                order=order,
+                submitted=submitted,
+                original_quantity=original_quantity,
+                initial_notional=initial_notional,
+            )
+        except Exception as exc:
+            if not is_retryable_buy_rejection(exc, side=order.side) or original_quantity <= 1:
+                raise
+
+            retry_reason = classify_buy_retry_reason(exc) or "buy_rejection"
+            retry_quantity = shrink_quantity_for_retry(original_quantity, shrink_ratio=self.retry_shrink_ratio)
+            if retry_quantity <= 0 or retry_quantity >= original_quantity:
+                raise
+
+            retry_meta = dict(order.meta)
+            retry_meta.update(
+                {
+                    "submission_retry_attempt": 1,
+                    "submission_retry_reason": retry_reason,
+                    "submission_retry_shrink_ratio": float(self.retry_shrink_ratio),
+                    "submission_retry_original_quantity": original_quantity,
+                    "submission_retry_quantity": retry_quantity,
+                    "submission_retry_initial_error": str(exc),
+                }
+            )
+            retry_order = replace(order, quantity=retry_quantity, meta=retry_meta)
+            try:
+                retried = self.broker.submit_order(
+                    symbol=retry_order.symbol,
+                    side=retry_order.side.lower(),
+                    quantity=float(retry_order.quantity),
                     order_type=order_type,
                     time_in_force=time_in_force,
-                    limit_price=order.limit_price,
-                    client_order_id=order.meta.get("client_order_id") if isinstance(order.meta, dict) else None,
+                    limit_price=retry_order.limit_price,
+                    client_order_id=client_order_id,
                 )
+            except Exception as retry_exc:
+                raise retry_exc from exc
+            return retried, self._build_retry_record(
+                order=order,
+                submitted=retried,
+                original_quantity=original_quantity,
+                final_quantity=retry_quantity,
+                retry_reason=retry_reason,
+                initial_error=str(exc),
+                initial_notional=initial_notional,
+                retry_scale=self.retry_shrink_ratio,
             )
-        return tuple(submitted)
 
     def _map_order_type(self, order: OrderIntent) -> tuple[str, str]:
         order_type = order.order_type.lower()
@@ -370,6 +463,133 @@ class AlpacaOrderSubmitter:
         if order_type == "limit":
             return "limit", "day"
         return "market", "day"
+
+    def _build_success_record(
+        self,
+        *,
+        order: OrderIntent,
+        submitted: Mapping[str, Any] | object,
+        original_quantity: int,
+        initial_notional: float | None,
+    ) -> SubmissionRetryRecord:
+        snapshot = submitted if isinstance(submitted, Mapping) else _payload_to_dict(submitted)
+        final_quantity = int(float(_payload_value(snapshot, "qty", "quantity", default=order.quantity)))
+        final_notional = self._estimate_quantity_notional(order, final_quantity)
+        return SubmissionRetryRecord(
+            symbol=order.symbol,
+            side=order.side.upper(),
+            client_order_id=extract_client_order_id(order),
+            original_quantity=original_quantity,
+            final_quantity=final_quantity,
+            retry_used=False,
+            initial_notional=initial_notional,
+            final_notional=final_notional,
+            final_order_id=str(_payload_value(snapshot, "order_id", "id", default="")),
+            final_status=str(_payload_value(snapshot, "status", default="")),
+            meta={
+                "order_type": order.order_type,
+            },
+        )
+
+    def _build_retry_record(
+        self,
+        *,
+        order: OrderIntent,
+        submitted: Mapping[str, Any] | object,
+        original_quantity: int,
+        final_quantity: int,
+        retry_reason: str,
+        initial_error: str,
+        initial_notional: float | None,
+        retry_scale: float,
+    ) -> SubmissionRetryRecord:
+        snapshot = submitted if isinstance(submitted, Mapping) else _payload_to_dict(submitted)
+        final_notional = self._estimate_quantity_notional(order, final_quantity)
+        return SubmissionRetryRecord(
+            symbol=order.symbol,
+            side=order.side.upper(),
+            client_order_id=extract_client_order_id(order),
+            original_quantity=original_quantity,
+            final_quantity=final_quantity,
+            retry_used=True,
+            retry_reason=retry_reason,
+            retry_scale=retry_scale,
+            initial_error=initial_error,
+            final_order_id=str(_payload_value(snapshot, "order_id", "id", default="")),
+            final_status=str(_payload_value(snapshot, "status", default="")),
+            initial_notional=initial_notional,
+            final_notional=final_notional,
+            meta={
+                "order_type": order.order_type,
+                "retry_quantity": final_quantity,
+            },
+        )
+
+    def _build_failure_record(self, order: OrderIntent, error: Exception) -> SubmissionRetryRecord:
+        original_quantity = int(order.quantity)
+        initial_notional = self._estimate_order_notional(order)
+        retry_reason = classify_buy_retry_reason(error) if is_retryable_buy_rejection(error, side=order.side) else None
+        initial_error = str(getattr(error, "__cause__", None) or error)
+        final_error = str(error)
+        return SubmissionRetryRecord(
+            symbol=order.symbol,
+            side=order.side.upper(),
+            client_order_id=extract_client_order_id(order),
+            original_quantity=original_quantity,
+            final_quantity=original_quantity,
+            retry_used=bool(retry_reason and original_quantity > 1),
+            retry_reason=retry_reason,
+            initial_error=initial_error,
+            final_error=final_error,
+            initial_notional=initial_notional,
+            final_notional=initial_notional,
+            meta={
+                "order_type": order.order_type,
+            },
+        )
+
+    def _build_submission_report(
+        self,
+        *,
+        records: Sequence[SubmissionRetryRecord],
+        attempted_orders: int,
+        submitted_orders: int,
+        failed_orders: int,
+    ) -> SubmissionRetryReport:
+        return SubmissionRetryReport(
+            attempted_orders=attempted_orders,
+            submitted_orders=submitted_orders,
+            retried_orders=sum(1 for record in records if record.retry_used),
+            failed_orders=failed_orders,
+            records=tuple(records),
+        )
+
+    def _estimate_order_reference_price(self, order: OrderIntent) -> float | None:
+        if order.limit_price is not None and order.limit_price > 0:
+            return float(order.limit_price)
+        for key in ("reference_price", "close", "open", "last_price"):
+            value = order.meta.get(key)
+            if value is None:
+                continue
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                return price
+        return None
+
+    def _estimate_order_notional(self, order: OrderIntent) -> float:
+        reference_price = self._estimate_order_reference_price(order)
+        if reference_price is None:
+            return 0.0
+        return float(order.quantity) * float(reference_price)
+
+    def _estimate_quantity_notional(self, order: OrderIntent, quantity: int) -> float:
+        reference_price = self._estimate_order_reference_price(order)
+        if reference_price is None:
+            return 0.0
+        return float(quantity) * float(reference_price)
 
 
 @dataclass(slots=True)
@@ -621,6 +841,9 @@ class PaperRunner:
                 elif approved_orders:
                     submitted = tuple(self.dependencies.order_submitter.submit_orders(approved_orders))
                     counts["submitted_batches"] = len(submitted)
+                    submission_retry_report = getattr(self.dependencies.order_submitter, "last_submission_report", None)
+                    if submission_retry_report is not None:
+                        meta["submission_retry"] = _payload_to_dict(submission_retry_report)
                     if ledger is not None:
                         order_contexts = self._seed_submitted_orders(
                             ledger=ledger,
@@ -682,6 +905,9 @@ class PaperRunner:
                     finished_at_utc=datetime.now(timezone.utc),
                     status="failed",
                 )
+            submission_retry_report = getattr(self.dependencies.order_submitter, "last_submission_report", None)
+            if submission_retry_report is not None and "submission_retry" not in meta:
+                meta["submission_retry"] = _payload_to_dict(submission_retry_report)
             failures.append(
                 PaperRunFailure(
                     stage="run",
@@ -1046,6 +1272,12 @@ class PaperRunner:
             return 0.0
         return float(order.quantity) * float(reference_price)
 
+    def _estimate_quantity_notional(self, order: OrderIntent, quantity: int) -> float:
+        reference_price = self._estimate_order_reference_price(order)
+        if reference_price is None:
+            return 0.0
+        return float(quantity) * float(reference_price)
+
     def _estimate_fill_slippage(
         self,
         *,
@@ -1189,7 +1421,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true", help="Submit orders instead of dry-run mode.")
     parser.add_argument("--output-format", choices=("json",), default="json")
     parser.add_argument("--demo-mode", action="store_true", help="Use the static no-op dependencies.")
-    parser.add_argument("--model", default="hist_gbm")
+    parser.add_argument("--model", default="hist_gbm", choices=list_alpha_expert_names())
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--data-root", default="data")
@@ -1249,6 +1481,7 @@ def build_alpaca_paper_runner(
     max_total_orders: int | None = None,
     require_paper_environment: bool = True,
 ) -> tuple[PaperRunner, PaperRunConfig]:
+    resolved_model_name = assert_supported_alpha_expert(model_name)
     config = overlay_config or OverlayConfig()
     storage = layout or StorageLayout()
     dataset_cache = SilverDatasetCache(layout=storage)
@@ -1264,7 +1497,7 @@ def build_alpaca_paper_runner(
     dependencies = PaperRunDependencies(
         signal_model=SilverWalkForwardSignalModel(
             dataset_cache=dataset_cache,
-            model_name=model_name,
+            model_name=resolved_model_name,
             horizon_bars=horizon,
         ),
         portfolio_policy=RiskAwareTopKPortfolioPolicy(
@@ -1300,7 +1533,7 @@ def build_alpaca_paper_runner(
         session_date=session_date or date.today(),
         dry_run=True,
         universe=tuple(universe or ()),
-        run_name=f"{model_name}-paper-demo",
+        run_name=f"{resolved_model_name}-paper-demo",
         artifact_dir=None,
         execution_equity_cap=None,
         post_submit_poll_seconds=15.0,

@@ -13,6 +13,7 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from stockmachine.alpha import get_alpha_expert, list_alpha_expert_names
 from stockmachine.backtest import DailyOpenHoldBacktestEngine, DataFrameSignalModel
 from stockmachine.data.loaders import load_us_equities_dataset
 from stockmachine.execution import NextOpenOrderExecutionPolicy
@@ -50,7 +51,8 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "rel_mom_20",
     "rel_mom_60",
 )
-MODEL_NAMES: tuple[str, ...] = ("factor_baseline", "ridge", "hist_gbm")
+BASE_MODEL_NAMES: tuple[str, ...] = ("factor_baseline", "ridge", "hist_gbm")
+MODEL_NAMES: tuple[str, ...] = list_alpha_expert_names()
 
 
 @dataclass(slots=True, frozen=True)
@@ -668,21 +670,50 @@ def generate_walk_forward_predictions(
         if train_frame.empty or test_frame.empty:
             continue
 
+        month_prediction_frames: dict[str, pd.DataFrame] = {}
+
         factor_scores = compute_factor_scores(test_frame)
-        prediction_frames.append(_assemble_predictions(test_frame, factor_scores, "factor_baseline"))
+        month_prediction_frames["factor_baseline"] = _assemble_predictions(test_frame, factor_scores, "factor_baseline")
 
         ridge_model = build_ridge_pipeline()
         ridge_model.fit(train_frame[list(FEATURE_COLUMNS)], train_frame["target"])
         ridge_scores = ridge_model.predict(test_frame[list(FEATURE_COLUMNS)])
-        prediction_frames.append(_assemble_predictions(test_frame, ridge_scores, "ridge"))
+        month_prediction_frames["ridge"] = _assemble_predictions(test_frame, ridge_scores, "ridge")
 
         tree_model = build_hist_gbm_model()
         tree_model.fit(train_frame[list(FEATURE_COLUMNS)], train_frame["target"])
         tree_scores = tree_model.predict(test_frame[list(FEATURE_COLUMNS)])
-        prediction_frames.append(_assemble_predictions(test_frame, tree_scores, "hist_gbm"))
+        month_prediction_frames["hist_gbm"] = _assemble_predictions(test_frame, tree_scores, "hist_gbm")
+
+        prediction_frames.extend(month_prediction_frames.values())
+        prediction_frames.extend(build_ensemble_prediction_frames(month_prediction_frames))
 
     predictions = pd.concat(prediction_frames, ignore_index=True)
     return predictions.sort_values(["model", "date", "score"], ascending=[True, True, False]).reset_index(drop=True)
+
+
+def build_ensemble_prediction_frames(
+    model_frames: dict[str, pd.DataFrame],
+) -> list[pd.DataFrame]:
+    """Build low-risk ensemble prediction frames from aligned base model outputs."""
+
+    ensemble_frames: list[pd.DataFrame] = []
+    for model_name in MODEL_NAMES:
+        spec = get_alpha_expert(model_name)
+        if not spec.components or not spec.combine_method:
+            continue
+        if any(component not in model_frames for component in spec.components):
+            continue
+        component_frames = {component: model_frames[component] for component in spec.components}
+        validate_aligned_frames(component_frames, required_columns=("score", "confidence"))
+        ensemble_frames.append(
+            _combine_prediction_frames(
+                component_frames=component_frames,
+                model_name=spec.name,
+                combine_method=spec.combine_method,
+            )
+        )
+    return ensemble_frames
 
 
 def build_ridge_pipeline() -> Pipeline:
@@ -1025,6 +1056,53 @@ def _assemble_predictions(frame: pd.DataFrame, scores: np.ndarray, model_name: s
     )
     prediction_frame["model"] = model_name
     return prediction_frame
+
+
+def _combine_prediction_frames(
+    *,
+    component_frames: dict[str, pd.DataFrame],
+    model_name: str,
+    combine_method: str,
+) -> pd.DataFrame:
+    _, base_frame = next(iter(component_frames.items()))
+    combined = base_frame.copy()
+    combined = combined.drop(columns=["score", "confidence", "model"])
+
+    score_columns: list[str] = []
+    for component_name, frame in component_frames.items():
+        column_name = f"score_{component_name}"
+        score_columns.append(column_name)
+        combined = combined.merge(
+            frame[["date", "symbol", "score"]].rename(columns={"score": column_name}),
+            on=["date", "symbol"],
+            how="inner",
+        )
+
+    if combine_method == "mean_score":
+        normalized_columns = []
+        for column_name in score_columns:
+            normalized_column = f"{column_name}_normalized"
+            normalized_columns.append(normalized_column)
+            combined[normalized_column] = combined.groupby("date")[column_name].transform(_zscore_series)
+        ensemble_score = combined[normalized_columns].mean(axis=1)
+    elif combine_method == "rank_average":
+        ranked_columns = []
+        for column_name in score_columns:
+            ranked_column = f"{column_name}_rank_pct"
+            ranked_columns.append(ranked_column)
+            combined[ranked_column] = combined.groupby("date")[column_name].rank(pct=True)
+        ensemble_score = combined[ranked_columns].mean(axis=1)
+    else:  # pragma: no cover - spec validation happens in registry
+        raise ValueError(f"Unsupported ensemble combine method: {combine_method}")
+
+    return _assemble_predictions(combined, ensemble_score.to_numpy(), model_name)
+
+
+def _zscore_series(values: pd.Series) -> pd.Series:
+    std = values.std(ddof=0)
+    if pd.isna(std) or std == 0:
+        return pd.Series(np.zeros(len(values)), index=values.index, dtype=float)
+    return (values - values.mean()) / std
 
 
 def _top_bottom_spread(day: pd.DataFrame) -> float:

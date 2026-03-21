@@ -94,3 +94,63 @@ class ExecutionReport:
     rejected_orders: int
     notes: tuple[str, ...] = ()
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class SubmissionRetryRecord:
+    """Structured summary for one order submission with an optional retry."""
+
+    symbol: str
+    side: str
+    client_order_id: str | None
+    original_quantity: int
+    final_quantity: int
+    retry_used: bool
+    retry_reason: str | None = None
+    retry_scale: float | None = None
+    initial_error: str | None = None
+    final_error: str | None = None
+    final_order_id: str | None = None
+    final_status: str | None = None
+    initial_notional: float | None = None
+    final_notional: float | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "side": self.side,
+            "client_order_id": self.client_order_id,
+            "original_quantity": self.original_quantity,
+            "final_quantity": self.final_quantity,
+            "retry_used": self.retry_used,
+            "retry_reason": self.retry_reason,
+            "retry_scale": self.retry_scale,
+            "initial_error": self.initial_error,
+            "final_error": self.final_error,
+            "final_order_id": self.final_order_id,
+            "final_status": self.final_status,
+            "initial_notional": self.initial_notional,
+            "final_notional": self.final_notional,
+            "meta": dict(self.meta),
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class SubmissionRetryReport:
+    """Batch summary for submission attempts and retry behavior."""
+
+    attempted_orders: int
+    submitted_orders: int
+    retried_orders: int
+    failed_orders: int
+    records: tuple[SubmissionRetryRecord, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempted_orders": self.attempted_orders,
+            "submitted_orders": self.submitted_orders,
+            "retried_orders": self.retried_orders,
+            "failed_orders": self.failed_orders,
+            "records": [record.to_dict() for record in self.records],
+        }

@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 
+from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.research.us_equities_baseline import OverlayConfig, run_silver_chain_backtest
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the silver-table US equities backtest.")
-    parser.add_argument("--model", default="hist_gbm")
+    parser.add_argument("--model", default="hist_gbm", choices=list_alpha_expert_names())
     parser.add_argument("--predict-start", default="2024-01-01")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=5)
