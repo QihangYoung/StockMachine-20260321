@@ -1,0 +1,43 @@
+project:
+  name: stockmachine
+  timezone: America/New_York
+
+market:
+  venue: US_EQUITY
+  calendar: XNYS
+  frequency: daily
+  universe: us_liquid_common_v1
+  benchmark: SPY
+
+data:
+  adjusted: false
+  label_adjusted: true
+  price_source: null
+  fundamentals_source: null
+  primary_security_source: null
+
+modeling:
+  objective: rank_next_5d_excess_return_from_next_open
+  retrain_frequency: monthly
+  prediction_horizon_bars: 5
+  feature_cutoff: session_close
+  execution_reference: next_session_open
+
+portfolio:
+  rebalance_frequency: daily
+  max_gross_exposure: 1.0
+  target_position_count: 25
+
+risk:
+  min_price: 5.0
+  min_median_dollar_volume_60d: 10000000
+  max_single_name_weight: 0.05
+  max_sector_weight: 0.25
+  max_daily_turnover: 0.25
+  stop_new_entries_on_drawdown: 0.08
+
+execution:
+  order_style: market_on_open
+  participation_rate: 0.05
+  cancel_after_seconds: 300
+  trade_at: next_session_open

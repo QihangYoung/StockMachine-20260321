@@ -1,0 +1,6 @@
+runtime:
+  mode: paper
+
+execution:
+  broker: paper
+  dry_run: true

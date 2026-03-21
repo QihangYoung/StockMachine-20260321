@@ -1,0 +1,45 @@
+project:
+  profile: us_equities_v1
+  timezone: America/New_York
+
+market:
+  venue: US_EQUITY
+  calendar: XNYS
+  frequency: daily
+  universe: us_liquid_common_v1
+  benchmark: SPY
+
+universe_filter:
+  allowed_exchanges:
+    - XNAS
+    - XNYS
+    - XASE
+  allowed_security_types:
+    - COMMON_STOCK
+  min_close_price: 5.0
+  min_history_bars: 120
+  min_median_dollar_volume_60d: 10000000
+  exclude_flags:
+    - ETF
+    - ETN
+    - ADR
+    - PREFERRED
+    - WARRANT
+    - RIGHT
+    - UNIT
+    - SPAC
+
+modeling:
+  task: cross_sectional_ranking
+  label_name: next_5_session_excess_return_from_next_open
+  feature_cutoff: session_close
+  entry_timing: next_session_open
+  exit_timing: open_after_5_sessions
+
+validation:
+  train_months: 36
+  validation_months: 6
+  test_months: 6
+  rebalance_frequency: daily
+  purge_sessions: 6
+  roll_frequency: monthly

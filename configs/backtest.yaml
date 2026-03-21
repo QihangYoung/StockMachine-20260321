@@ -1,0 +1,9 @@
+runtime:
+  mode: backtest
+
+data:
+  use_cached_data: true
+
+execution:
+  simulated_slippage_bps: 10
+  simulated_commission_bps: 3

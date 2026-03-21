@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stockmachine"
+version = "0.1.0"
+description = "Research-first trading system scaffold"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Codex" }
+]
+dependencies = [
+  "numpy>=2.2.0",
+  "pandas>=2.3.0",
+  "scikit-learn>=1.7.0",
+  "yfinance>=0.2.65",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

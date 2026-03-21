@@ -1,0 +1,22 @@
+# Docs Index
+
+- `architecture.md`: repository boundaries, system flow, and runtime layers
+- `alpaca-setup.md`: Alpaca credentials, feed caveats, and first validation steps
+- `alpaca-paper-demo-plan.md`: formal plan, workstream split, and acceptance criteria for the Alpaca paper demo
+- `paper-productization-plan.md`: phased hardening plan to turn the Alpaca paper demo into a daily-operable system
+- `paper-operator-playbook.md`: concise daily operator runbook for smoke, reconcile, and maintenance
+- `project-status-2026-03-22.md`: current module progress, milestone state, and next recommended directions
+- `backlog.md`: prioritized implementation backlog and delivery gates
+- `merge-guide.md`: integration map, contract boundaries, and merge checklist for external contributors
+- `canonical-schemas.md`: internal silver-table contracts and key fields
+- `data-strategy.md`: source selection, ingestion plan, and crawler scope
+- `evaluation-protocol.md`: timing rules, walk-forward validation, and pass gates
+- `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
+- `model-design.md`: predictive model framing and decision checklist
+- `roadmap.md`: suggested delivery order from research to production
+- `us-equities-adj-factor-report.md`: adjustment-factor integration and post-adjustment backtest impact
+- `us-equities-alpaca-migration-report.md`: Alpaca migration status, feed split, and post-migration backtest impact
+- `us-equities-baseline-report.md`: first baseline experiment summary on US equities
+- `us-equities-risk-aware-report.md`: constrained and cost-aware follow-up report
+- `us-equities-silver-chain-report.md`: formal silver-table backtest migration report
+- `us-equities-v1.md`: frozen first market scope and assumptions
