@@ -146,6 +146,10 @@ The first strict-rerun findings live in:
 
 - [docs/p0-research-rigor-report.md](docs/p0-research-rigor-report.md)
 
+The first P1 rigor suite findings live in:
+
+- [docs/p1-research-rigor-report.md](docs/p1-research-rigor-report.md)
+
 Before strict reruns, the current fixed US-equities research universe can be
 bootstrapped into session-scoped metadata history with:
 
@@ -169,13 +173,28 @@ Each sweep now writes:
 - `summary_metrics.csv`
 - `research_protocol.json`
 
+To run the first P1 rigor suite on the current full model zoo:
+
+```text
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_p1_rigor_suite --output-root artifacts/p1_rigor_suite
+```
+
+The suite currently writes:
+
+- `strict_full/summary_metrics.csv`
+- `stability/yearly_summary.csv`
+- `stability/quarterly_summary.csv`
+- `cost_stress/summary_metrics.csv`
+- `topk_sweep/summary_metrics.csv`
+
 ## Next Suggested Milestones
 
 1. Continue paper-demo productization with scheduler-friendly daily runs.
 2. Harden restart recovery, lingering-order maintenance, and operator automation.
 3. Add websocket `trade_updates` handling for faster order-state convergence.
 4. Extract the paper signal path out of the research module into a cleaner alpha runtime layer.
-5. Move from P0 rigor hardening to P1 stability, cost-stress, and parameter-robustness analysis.
+5. Expand P1 rigor from the first full sweep into broader parameter and significance analysis.
 
 ## Paper Demo
 
