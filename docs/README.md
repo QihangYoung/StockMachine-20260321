@@ -7,6 +7,7 @@
 - `paper-operator-playbook.md`: concise daily operator runbook for smoke, reconcile, and maintenance
 - `p0-research-rigor-report.md`: strict-rerun findings after point-in-time and formal walk-forward hardening
 - `p1-research-rigor-report.md`: full-model strict leaderboard plus stability, cost-stress, and `top_k` robustness findings
+- `peer-comparison-backtest-protocol.md`: current full-model strict backtest protocol for external peer replication
 - `peer-comparison-backtest-setting.md`: external-facing strict backtest protocol for peer comparison
 - `project-status-2026-03-22.md`: current module progress, milestone state, and next recommended directions
 - `backlog.md`: prioritized implementation backlog and delivery gates
