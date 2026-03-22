@@ -40,7 +40,10 @@ from stockmachine.research.comparison import (
     validate_aligned_frames,
 )
 from stockmachine.research.splitting import WalkForwardSplit, WalkForwardSplitConfig, build_walk_forward_splits
-from stockmachine.research.universe import build_point_in_time_metadata_history
+from stockmachine.research.universe import (
+    DEFAULT_RESEARCH_UNIVERSE_NAME,
+    build_point_in_time_metadata_history,
+)
 
 
 DEFAULT_UNIVERSE: tuple[str, ...] = (
@@ -285,8 +288,10 @@ def run_silver_chain_backtest(
     price_data = build_price_panel_from_silver(dataset)
     metadata = build_point_in_time_metadata_history(
         pd.Index(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"].drop_duplicates().sort_values()),
+        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
         symbol_master_frame=dataset["symbol_master"],
         industry_membership_frame=dataset["industry_membership"],
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
     )
     research_frame = build_research_frame(
         price_data,

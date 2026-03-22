@@ -128,6 +128,35 @@ def _industry_rows() -> list[dict[str, object]]:
     ]
 
 
+def _universe_membership_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "session_date": "2025-01-02",
+            "universe_name": "research_v1",
+            "symbol": "AAPL",
+            "is_member": True,
+            "membership_source": "historical_index_membership",
+            "entry_date": None,
+            "exit_date": None,
+            "source_name": "test_source",
+            "load_time_utc": "2025-01-02T22:00:00+00:00",
+            "source_version": "v1",
+        },
+        {
+            "session_date": "2025-01-03",
+            "universe_name": "research_v1",
+            "symbol": "AAPL",
+            "is_member": True,
+            "membership_source": "historical_index_membership",
+            "entry_date": None,
+            "exit_date": None,
+            "source_name": "test_source",
+            "load_time_utc": "2025-01-03T22:00:00+00:00",
+            "source_version": "v1",
+        },
+    ]
+
+
 def test_load_point_in_time_universe_uses_latest_visible_snapshot(tmp_path) -> None:
     layout = StorageLayout(root=tmp_path)
     symbol_dir = layout.silver_table_dir("symbol_master")
@@ -152,6 +181,27 @@ def test_load_point_in_time_universe_uses_latest_visible_snapshot(tmp_path) -> N
     industry_map = load_universe_industry_map("2025-01-03", layout=layout)
     assert list(industry_map["symbol"]) == ["AAPL"]
     assert industry_map.iloc[0]["sector"] == "Technology New"
+
+
+def test_load_point_in_time_universe_prefers_explicit_membership_snapshot(tmp_path) -> None:
+    layout = StorageLayout(root=tmp_path)
+    symbol_dir = layout.silver_table_dir("symbol_master")
+    industry_dir = layout.silver_table_dir("industry_membership")
+    membership_dir = layout.silver_table_dir("universe_membership")
+
+    rows = _symbol_master_rows()
+    rows[1]["is_active"] = True
+    _write_jsonl(symbol_dir / "snapshot.jsonl", rows)
+    _write_jsonl(industry_dir / "snapshot.jsonl", _industry_rows())
+    _write_jsonl(membership_dir / "snapshot.jsonl", _universe_membership_rows())
+
+    universe = load_point_in_time_universe("2025-01-03", layout=layout, universe_name="research_v1")
+
+    assert universe.universe_membership_snapshot_date == pd.Timestamp("2025-01-03")
+    assert universe.membership_source == "explicit_universe_membership"
+    assert universe.members == ("AAPL",)
+    assert list(universe.universe_membership["symbol"]) == ["AAPL"]
+    assert universe.conservative is False
 
 
 def test_load_point_in_time_universe_is_conservative_when_no_visible_snapshot(tmp_path) -> None:
@@ -229,6 +279,21 @@ def test_build_point_in_time_metadata_history_emits_date_aware_rows(tmp_path) ->
     jan3 = history.loc[history["date"] == pd.Timestamp("2025-01-03")].iloc[0]
     assert jan3["exchange"] == "XNAS"
     assert jan3["sector"] == "Technology New"
+
+
+def test_build_point_in_time_metadata_history_respects_explicit_membership() -> None:
+    rows = _symbol_master_rows()
+    rows[1]["is_active"] = True
+    history = build_point_in_time_metadata_history(
+        pd.Index([pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")]),
+        universe_membership_frame=pd.DataFrame(_universe_membership_rows()),
+        symbol_master_frame=pd.DataFrame(rows),
+        industry_membership_frame=pd.DataFrame(_industry_rows()),
+        universe_name="research_v1",
+    )
+
+    assert set(history["symbol"]) == {"AAPL"}
+    assert history["date"].nunique() == 2
 
 
 def test_build_point_in_time_metadata_history_supports_exact_snapshot_fast_path() -> None:

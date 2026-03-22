@@ -8,6 +8,7 @@ import yfinance as yf
 
 from stockmachine.data.loaders.silver import load_silver_table
 from stockmachine.ingestion.storage import StorageLayout, write_jsonl
+from stockmachine.research.universe import DEFAULT_RESEARCH_UNIVERSE_NAME
 from stockmachine.research.us_equities_baseline import BENCHMARK_SYMBOL, DEFAULT_UNIVERSE
 
 
@@ -33,10 +34,19 @@ def bootstrap_us_equities_yahoo_to_silver(
 
     symbol_master_rows = _build_symbol_master_rows(metadata, snapshot_date=snapshot_date, load_time_utc=load_time_utc)
     industry_rows = _build_industry_rows(metadata, snapshot_date=snapshot_date, load_time_utc=load_time_utc)
+    universe_rows = _build_universe_membership_rows(
+        metadata,
+        session_date=snapshot_date,
+        load_time_utc=load_time_utc,
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        source_version="bootstrap_v1",
+        membership_source="yahoo_bootstrap",
+    )
     daily_rows, benchmark_rows, adj_factor_rows = _build_bar_rows(price_data, load_time_utc=load_time_utc)
 
     write_jsonl(storage.silver_table_dir("symbol_master") / "yahoo_bootstrap.jsonl", symbol_master_rows)
     write_jsonl(storage.silver_table_dir("industry_membership") / "yahoo_bootstrap.jsonl", industry_rows)
+    write_jsonl(storage.silver_table_dir("universe_membership") / "yahoo_bootstrap.jsonl", universe_rows)
     write_jsonl(storage.silver_table_dir("daily_bar") / "yahoo_bootstrap.jsonl", daily_rows)
     write_jsonl(storage.silver_table_dir("adj_factor") / "yahoo_bootstrap.jsonl", adj_factor_rows)
     write_jsonl(storage.silver_table_dir("benchmark_index") / "yahoo_bootstrap.jsonl", benchmark_rows)
@@ -44,6 +54,7 @@ def bootstrap_us_equities_yahoo_to_silver(
     return {
         "symbol_master_rows": len(symbol_master_rows),
         "industry_membership_rows": len(industry_rows),
+        "universe_membership_rows": len(universe_rows),
         "daily_bar_rows": len(daily_rows),
         "adj_factor_rows": len(adj_factor_rows),
         "benchmark_index_rows": len(benchmark_rows),
@@ -64,6 +75,7 @@ def backfill_static_metadata_history_from_silver(
 
     storage = layout or StorageLayout()
     daily_bar = load_silver_table("daily_bar", layout=storage)
+    universe_membership = load_silver_table("universe_membership", layout=storage)
     symbol_master = load_silver_table("symbol_master", layout=storage)
     industry_membership = load_silver_table("industry_membership", layout=storage)
 
@@ -71,6 +83,7 @@ def backfill_static_metadata_history_from_silver(
         return {
             "session_dates": 0,
             "symbols": 0,
+            "universe_membership_rows": 0,
             "symbol_master_rows": 0,
             "industry_membership_rows": 0,
         }
@@ -86,11 +99,20 @@ def backfill_static_metadata_history_from_silver(
         return {
             "session_dates": 0,
             "symbols": 0,
+            "universe_membership_rows": 0,
             "symbol_master_rows": 0,
             "industry_membership_rows": 0,
         }
 
     active_symbols = set(daily_bar["symbol"].dropna().astype(str).unique().tolist())
+    latest_universe_membership = _latest_rows_by_key(
+        universe_membership,
+        key_columns=("universe_name", "symbol"),
+    )
+    if not latest_universe_membership.empty and "symbol" in latest_universe_membership.columns:
+        latest_universe_membership = latest_universe_membership.loc[
+            latest_universe_membership["symbol"].astype(str).isin(active_symbols)
+        ].copy()
     latest_symbol_master = _latest_rows_by_key(symbol_master, key_columns=("symbol",))
     latest_symbol_master = latest_symbol_master.loc[
         latest_symbol_master["symbol"].astype(str).isin(active_symbols)
@@ -117,7 +139,18 @@ def backfill_static_metadata_history_from_silver(
         load_time_utc=load_time_utc,
         source_version=source_version,
     )
+    universe_rows = _expand_static_universe_membership_rows(
+        latest_universe_membership,
+        session_dates=session_dates,
+        fallback_symbols=sorted(active_symbols),
+        load_time_utc=load_time_utc,
+        source_version=source_version,
+    )
 
+    write_jsonl(
+        storage.silver_table_dir("universe_membership") / "static_history_backfill.jsonl",
+        universe_rows,
+    )
     write_jsonl(
         storage.silver_table_dir("symbol_master") / "static_history_backfill.jsonl",
         symbol_rows,
@@ -129,6 +162,7 @@ def backfill_static_metadata_history_from_silver(
     return {
         "session_dates": len(session_dates),
         "symbols": len(active_symbols),
+        "universe_membership_rows": len(universe_rows),
         "symbol_master_rows": len(symbol_rows),
         "industry_membership_rows": len(industry_rows),
     }
@@ -317,6 +351,34 @@ def _build_industry_rows(
     return rows
 
 
+def _build_universe_membership_rows(
+    metadata: pd.DataFrame,
+    *,
+    session_date: str,
+    load_time_utc: str,
+    universe_name: str,
+    source_version: str,
+    membership_source: str,
+) -> list[dict[str, object]]:
+    rows = []
+    for row in metadata.itertuples(index=False):
+        rows.append(
+            {
+                "session_date": session_date,
+                "universe_name": universe_name,
+                "symbol": row.symbol,
+                "is_member": True,
+                "membership_source": membership_source,
+                "entry_date": None,
+                "exit_date": None,
+                "source_name": "yahoo_finance",
+                "load_time_utc": load_time_utc,
+                "source_version": source_version,
+            }
+        )
+    return rows
+
+
 def _latest_rows_by_key(frame: pd.DataFrame, *, key_columns: tuple[str, ...]) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -348,6 +410,45 @@ def _expand_static_snapshot_rows(
             payload["as_of_date"] = as_of_date
             payload["load_time_utc"] = load_time_utc
             payload["source_version"] = source_version
+            rows.append(payload)
+    return rows
+
+
+def _expand_static_universe_membership_rows(
+    frame: pd.DataFrame,
+    *,
+    session_dates: list[pd.Timestamp],
+    fallback_symbols: list[str],
+    load_time_utc: str,
+    source_version: str,
+) -> list[dict[str, object]]:
+    if frame.empty:
+        frame = pd.DataFrame(
+            [
+                {
+                    "universe_name": DEFAULT_RESEARCH_UNIVERSE_NAME,
+                    "symbol": symbol,
+                    "is_member": True,
+                    "membership_source": "default_research_universe",
+                    "entry_date": None,
+                    "exit_date": None,
+                    "source_name": "bootstrap",
+                }
+                for symbol in fallback_symbols
+            ]
+        )
+
+    rows: list[dict[str, object]] = []
+    for session_date in session_dates:
+        session_str = str(pd.Timestamp(session_date).date())
+        for row in frame.to_dict(orient="records"):
+            payload = dict(row)
+            payload["session_date"] = session_str
+            payload["load_time_utc"] = load_time_utc
+            payload["source_version"] = source_version
+            payload["is_member"] = bool(payload.get("is_member", True))
+            payload["membership_source"] = payload.get("membership_source") or "static_history_backfill"
+            payload["source_name"] = payload.get("source_name") or "bootstrap"
             rows.append(payload)
     return rows
 

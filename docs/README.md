@@ -16,6 +16,7 @@
 - `evaluation-protocol.md`: timing rules, walk-forward validation, and pass gates
 - `research-protocol.md`: frozen P0 contract for timing, point-in-time universe, and splitter defaults
 - `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
+- `historical-universe-contract.md`: preferred P2 contract for session-scoped universe membership
 - `model-design.md`: predictive model framing and decision checklist
 - `roadmap.md`: suggested delivery order from research to production
 - `us-equities-adj-factor-report.md`: adjustment-factor integration and post-adjustment backtest impact

@@ -50,6 +50,45 @@ def _column(
 
 
 CANONICAL_TABLES: dict[str, TableSpec] = {
+    "universe_membership": TableSpec(
+        name="universe_membership",
+        layer=DataLayer.SILVER,
+        description="Point-in-time research-universe membership by session date.",
+        primary_key=("session_date", "universe_name", "symbol"),
+        partition_by=("session_date",),
+        columns=(
+            _column("session_date", DataType.DATE, "Trading session date."),
+            _column("universe_name", DataType.STRING, "Named research universe."),
+            _column("symbol", DataType.STRING, "Ticker symbol."),
+            _column("is_member", DataType.BOOLEAN, "Whether the symbol is in the universe."),
+            _column(
+                "membership_source",
+                DataType.STRING,
+                "How the membership row was produced or sourced.",
+                nullable=True,
+            ),
+            _column(
+                "entry_date",
+                DataType.DATE,
+                "Optional first effective session date for the constituent.",
+                nullable=True,
+            ),
+            _column(
+                "exit_date",
+                DataType.DATE,
+                "Optional last effective session date for the constituent.",
+                nullable=True,
+            ),
+            _column("source_name", DataType.STRING, "Upstream source identifier."),
+            _column("load_time_utc", DataType.DATETIME_UTC, "Load timestamp in UTC."),
+            _column(
+                "source_version",
+                DataType.STRING,
+                "Optional upstream schema or batch version.",
+                nullable=True,
+            ),
+        ),
+    ),
     "symbol_master": TableSpec(
         name="symbol_master",
         layer=DataLayer.SILVER,

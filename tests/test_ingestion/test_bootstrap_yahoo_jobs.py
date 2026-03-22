@@ -77,6 +77,8 @@ def test_backfill_static_metadata_history_from_silver_writes_session_scoped_snap
     def _load_silver_table(table_name: str, *, layout: StorageLayout | None = None) -> pd.DataFrame:
         if table_name == "daily_bar":
             return daily_bar.copy()
+        if table_name == "universe_membership":
+            return pd.DataFrame()
         if table_name == "symbol_master":
             return symbol_master.copy()
         if table_name == "industry_membership":
@@ -91,16 +93,21 @@ def test_backfill_static_metadata_history_from_silver_writes_session_scoped_snap
     assert result == {
         "session_dates": 2,
         "symbols": 2,
+        "universe_membership_rows": 4,
         "symbol_master_rows": 4,
         "industry_membership_rows": 4,
     }
 
+    universe_backfill = (layout.silver_table_dir("universe_membership") / "static_history_backfill.jsonl").read_text(
+        encoding="utf-8"
+    )
     symbol_master_backfill = (layout.silver_table_dir("symbol_master") / "static_history_backfill.jsonl").read_text(
         encoding="utf-8"
     )
     industry_backfill = (layout.silver_table_dir("industry_membership") / "static_history_backfill.jsonl").read_text(
         encoding="utf-8"
     )
+    assert '"session_date": "2025-01-02"' in universe_backfill
     assert '"as_of_date": "2025-01-02"' in symbol_master_backfill
     assert '"source_version": "static_history_backfill_v1"' in symbol_master_backfill
     assert '"as_of_date": "2025-01-03"' in industry_backfill

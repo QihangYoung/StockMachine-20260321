@@ -150,6 +150,10 @@ The first P1 rigor suite findings live in:
 
 - [docs/p1-research-rigor-report.md](docs/p1-research-rigor-report.md)
 
+The first P2 historical-universe contract lives in:
+
+- [docs/historical-universe-contract.md](docs/historical-universe-contract.md)
+
 Before strict reruns, the current fixed US-equities research universe can be
 bootstrapped into session-scoped metadata history with:
 
