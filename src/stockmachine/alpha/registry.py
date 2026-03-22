@@ -94,6 +94,18 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         task="cross_sectional_regression",
         description="XGBoost regressor over the baseline feature panel as a gradient-boosted expert.",
     ),
+    "lstm_regressor": AlphaExpertSpec(
+        name="lstm_regressor",
+        family="sequence",
+        task="cross_sectional_regression",
+        description="PyTorch LSTM regressor over rolling windows of the baseline feature panel.",
+    ),
+    "transformer_regressor": AlphaExpertSpec(
+        name="transformer_regressor",
+        family="sequence",
+        task="cross_sectional_regression",
+        description="Lightweight PyTorch Transformer regressor over rolling windows of the baseline feature panel.",
+    ),
     "ensemble_hist_gbm_ridge_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_ridge_mean",
         family="ensemble",
@@ -208,6 +220,8 @@ def list_alpha_experts() -> tuple[AlphaExpertSpec, ...]:
         "lightgbm_ranker",
         "catboost_regressor",
         "xgboost_regressor",
+        "lstm_regressor",
+        "transformer_regressor",
         "ensemble_hist_gbm_ridge_mean",
         "ensemble_hist_gbm_ridge_rank",
         "ensemble_hist_gbm_random_forest_mean",

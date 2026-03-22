@@ -22,6 +22,11 @@ from stockmachine.research.builders.boosting_models import (
     build_xgboost_regressor,
     get_boosting_model_builders,
 )
+from stockmachine.research.builders.sequence_models import (
+    build_lstm_regressor,
+    build_transformer_regressor,
+    get_sequence_model_builders,
+)
 
 __all__ = [
     "FEATURE_COLUMNS",
@@ -32,12 +37,15 @@ __all__ = [
     "build_huber_pipeline",
     "build_lightgbm_ranker",
     "build_lightgbm_regressor",
+    "build_lstm_regressor",
     "build_query_group_sizes",
     "build_random_forest_model",
     "build_ridge_pipeline",
+    "build_transformer_regressor",
     "build_xgboost_regressor",
     "get_boosting_model_builders",
     "get_lightgbm_model_builders",
+    "get_sequence_model_builders",
     "get_sklearn_model_builders",
     "prepare_model_frame",
 ]

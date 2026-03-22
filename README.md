@@ -37,6 +37,8 @@ For Alpaca setup and credential checks, see [docs/alpaca-setup.md](docs/alpaca-s
 For the current strict research contract and rerun findings, see
 [docs/research-protocol.md](docs/research-protocol.md) and
 [docs/p0-research-rigor-report.md](docs/p0-research-rigor-report.md).
+For the first sequence-model migration pass, see
+[docs/sequence-expert-migration-report.md](docs/sequence-expert-migration-report.md).
 
 ## Current Status
 
@@ -128,6 +130,19 @@ python -m stockmachine.apps.run_us_equities_silver_chain --model hist_gbm --pred
 
 This bridge is for research plumbing only and should later be replaced by our
 official ingestion sources.
+
+## Optional Sequence Models
+
+The first sequence-model migration pass adds optional `lstm_regressor` and
+`transformer_regressor` experts. They require the optional `sequence`
+dependencies:
+
+```text
+python -m pip install -e .[sequence]
+```
+
+Sequence-model outputs remain inside the same strict research and backtest
+workflow as the rest of the model zoo.
 
 ## Research Rigor Workflow
 

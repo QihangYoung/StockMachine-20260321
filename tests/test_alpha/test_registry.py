@@ -22,6 +22,8 @@ def test_alpha_registry_lists_supported_baselines() -> None:
         "lightgbm_ranker",
         "catboost_regressor",
         "xgboost_regressor",
+        "lstm_regressor",
+        "transformer_regressor",
         "ensemble_hist_gbm_ridge_mean",
         "ensemble_hist_gbm_ridge_rank",
         "ensemble_hist_gbm_random_forest_mean",
@@ -41,6 +43,8 @@ def test_alpha_registry_lists_supported_baselines() -> None:
     assert get_alpha_expert("extra_trees").family == "tree"
     assert get_alpha_expert("lightgbm_ranker").family == "ranker"
     assert get_alpha_expert("catboost_regressor").family == "tree"
+    assert get_alpha_expert("lstm_regressor").family == "sequence"
+    assert get_alpha_expert("transformer_regressor").family == "sequence"
     assert get_alpha_expert("ensemble_hist_gbm_ridge_mean").components == ("hist_gbm", "ridge")
     assert get_alpha_expert("ensemble_hist_gbm_ridge_rank").combine_method == "rank_average"
     assert get_alpha_expert("ensemble_hist_gbm_random_forest_mean").components == (

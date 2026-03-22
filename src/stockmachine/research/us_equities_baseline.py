@@ -24,12 +24,15 @@ from stockmachine.research.builders import (
     build_huber_pipeline,
     build_lightgbm_ranker,
     build_lightgbm_regressor,
+    build_lstm_regressor,
     build_query_group_sizes,
     build_random_forest_model,
     build_ridge_pipeline,
+    build_transformer_regressor,
     build_xgboost_regressor,
     get_boosting_model_builders,
     get_lightgbm_model_builders,
+    get_sequence_model_builders,
     get_sklearn_model_builders,
     prepare_model_frame,
 )
@@ -828,6 +831,7 @@ def get_trainable_model_builders() -> dict[str, Callable[[], object]]:
     builders.update(get_sklearn_model_builders())
     builders.update(get_lightgbm_model_builders())
     builders.update(get_boosting_model_builders())
+    builders.update(get_sequence_model_builders())
     return builders
 
 
@@ -846,6 +850,8 @@ def get_trainable_model_fit_kind(name: str) -> str:
 
     if name == "lightgbm_ranker":
         return "ranker"
+    if name in {"lstm_regressor", "transformer_regressor"}:
+        return "sequence_regressor"
     if name in get_trainable_model_builders():
         return "regressor"
     raise ValueError(f"Unsupported trainable base model '{name}'.")
@@ -879,8 +885,12 @@ def fit_predict_base_model(
     fit_kwargs: dict[str, object] = {}
     if fit_kind == "ranker":
         fit_kwargs["group"] = build_query_group_sizes(prepared_train)
-    model.fit(prepared_train[list(FEATURE_COLUMNS)], prepared_train["target"], **fit_kwargs)
-    scores = model.predict(prepared_test[list(FEATURE_COLUMNS)])
+    if fit_kind == "sequence_regressor":
+        model.fit(prepared_train, prepared_train["target"], **fit_kwargs)
+        scores = model.predict(prepared_test)
+    else:
+        model.fit(prepared_train[list(FEATURE_COLUMNS)], prepared_train["target"], **fit_kwargs)
+        scores = model.predict(prepared_test[list(FEATURE_COLUMNS)])
     return _assemble_predictions(prepared_test, scores, name)
 
 
