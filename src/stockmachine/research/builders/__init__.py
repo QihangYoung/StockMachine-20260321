@@ -23,8 +23,10 @@ from stockmachine.research.builders.boosting_models import (
     get_boosting_model_builders,
 )
 from stockmachine.research.builders.sequence_models import (
+    SEQUENCE_FEATURE_COLUMNS,
     build_lstm_regressor,
     build_transformer_regressor,
+    engineer_sequence_features,
     get_sequence_model_builders,
 )
 
@@ -43,6 +45,8 @@ __all__ = [
     "build_ridge_pipeline",
     "build_transformer_regressor",
     "build_xgboost_regressor",
+    "SEQUENCE_FEATURE_COLUMNS",
+    "engineer_sequence_features",
     "get_boosting_model_builders",
     "get_lightgbm_model_builders",
     "get_sequence_model_builders",

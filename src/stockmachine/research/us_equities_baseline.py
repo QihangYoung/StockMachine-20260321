@@ -710,10 +710,13 @@ def generate_walk_forward_predictions(
 
         split_prediction_frames: dict[str, pd.DataFrame] = {}
         for model_name in BASE_MODEL_NAMES:
+            fit_kind = get_trainable_model_fit_kind(model_name) if model_name != "factor_baseline" else "factor"
             predictions = fit_predict_base_model(
                 model_name,
-                train_frame=train_frame,
+                train_frame=split.train_frame.copy() if fit_kind == "sequence_regressor" else train_frame,
                 test_frame=test_frame,
+                validation_frame=split.validation_frame.copy() if fit_kind == "sequence_regressor" else None,
+                history_frame=train_frame if fit_kind == "sequence_regressor" else None,
             )
             split_prediction_frames[model_name] = _attach_split_metadata(predictions, split)
 
@@ -870,6 +873,8 @@ def fit_predict_base_model(
     *,
     train_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
+    validation_frame: pd.DataFrame | None = None,
+    history_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Fit one base model on the rolling window and emit the prediction frame."""
 
@@ -886,6 +891,8 @@ def fit_predict_base_model(
     if fit_kind == "ranker":
         fit_kwargs["group"] = build_query_group_sizes(prepared_train)
     if fit_kind == "sequence_regressor":
+        fit_kwargs["validation_frame"] = prepare_model_frame(validation_frame) if validation_frame is not None else None
+        fit_kwargs["history_frame"] = prepare_model_frame(history_frame) if history_frame is not None else prepared_train
         model.fit(prepared_train, prepared_train["target"], **fit_kwargs)
         scores = model.predict(prepared_test)
     else:

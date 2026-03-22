@@ -16,14 +16,24 @@ def _toy_sequence_frame() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for symbol_index, symbol in enumerate(symbols, start=1):
         for date_index, current_date in enumerate(dates, start=1):
+            close = 100.0 + symbol_index + date_index
+            open_price = close * 0.997
+            high = close * 1.01
+            low = close * 0.99
+            volume = 1_000_000.0 + symbol_index * 25_000.0 + date_index * 1_000.0
             row = {
                 "date": current_date,
                 "symbol": symbol,
                 "sector": "Tech",
                 "industry": "Tech-Industry",
-                "close": 100.0 + symbol_index + date_index,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "dollar_volume": close * volume,
                 "vol_20": 0.02 + symbol_index / 100.0,
-                "median_dollar_volume_20": 75_000_000.0 + symbol_index * 1_000_000.0,
+                "median_dollar_volume_20": 75_000_000.0 + symbol_index * 1_000_000.0 + date_index * 100_000.0,
                 "future_return": 0.001 * date_index,
                 "benchmark_future_return": 0.0002 * date_index,
             }
@@ -36,9 +46,12 @@ def _toy_sequence_frame() -> pd.DataFrame:
 
 def test_lstm_sequence_builder_fit_and_predict() -> None:
     frame = _toy_sequence_frame()
-    model = build_lstm_regressor(lookback=5, epochs=1, hidden_size=8, max_train_samples=128)
+    validation = frame.loc[frame["date"] >= frame["date"].sort_values().iloc[-8]].copy()
+    train = frame.loc[frame["date"] < validation["date"].min()].copy()
+    history = frame.copy()
+    model = build_lstm_regressor(lookback=5, epochs=2, patience=1, hidden_size=8, max_train_samples=128)
 
-    model.fit(frame, frame["target"])
+    model.fit(train, train["target"], validation_frame=validation, history_frame=history)
     predictions = model.predict(frame)
 
     assert len(predictions) == len(frame)
@@ -47,9 +60,13 @@ def test_lstm_sequence_builder_fit_and_predict() -> None:
 
 def test_transformer_sequence_builder_fit_and_predict() -> None:
     frame = _toy_sequence_frame()
+    validation = frame.loc[frame["date"] >= frame["date"].sort_values().iloc[-8]].copy()
+    train = frame.loc[frame["date"] < validation["date"].min()].copy()
+    history = frame.copy()
     model = build_transformer_regressor(
         lookback=5,
-        epochs=1,
+        epochs=2,
+        patience=1,
         d_model=16,
         nhead=4,
         num_layers=1,
@@ -57,7 +74,7 @@ def test_transformer_sequence_builder_fit_and_predict() -> None:
         max_train_samples=128,
     )
 
-    model.fit(frame, frame["target"])
+    model.fit(train, train["target"], validation_frame=validation, history_frame=history)
     predictions = model.predict(frame)
 
     assert len(predictions) == len(frame)

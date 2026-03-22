@@ -100,14 +100,24 @@ def test_sequence_model_builders_fit_and_predict() -> None:
     rows: list[dict[str, object]] = []
     for symbol_index, symbol in enumerate(symbols, start=1):
         for date_index, current_date in enumerate(dates, start=1):
+            close = 100.0 + date_index
+            open_price = close * 0.998
+            high = close * 1.01
+            low = close * 0.99
+            volume = 900_000.0 + symbol_index * 20_000.0 + date_index * 1_000.0
             row = {
                 "date": current_date,
                 "symbol": symbol,
                 "sector": "Tech",
                 "industry": "Tech-Industry",
-                "close": 100.0 + date_index,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "dollar_volume": close * volume,
                 "vol_20": 0.02,
-                "median_dollar_volume_20": 70_000_000.0,
+                "median_dollar_volume_20": 70_000_000.0 + date_index * 100_000.0,
                 "future_return": 0.001 * date_index,
                 "benchmark_future_return": 0.0003 * date_index,
             }
@@ -132,6 +142,8 @@ def test_sequence_model_builders_fit_and_predict() -> None:
 
     for builder in builders:
         model = builder()
-        model.fit(frame, frame["target"])
+        validation = frame.loc[frame["date"] >= frame["date"].sort_values().iloc[-4]].copy()
+        train = frame.loc[frame["date"] < validation["date"].min()].copy()
+        model.fit(train, train["target"], validation_frame=validation, history_frame=frame)
         predictions = model.predict(frame)
         assert len(predictions) == len(frame)
