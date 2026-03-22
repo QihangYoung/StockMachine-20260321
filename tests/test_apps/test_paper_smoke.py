@@ -226,3 +226,41 @@ def test_paper_smoke_random_forest_rank_profile_sets_defaults(tmp_path, monkeypa
     assert output["strategy_profile"] == "us_hist_gbm_random_forest_rank_daily"
     assert output["model"] == "ensemble_hist_gbm_random_forest_rank"
     assert output["run_name"] == "us-hist-gbm-random-forest-rank-daily"
+
+
+def test_paper_smoke_random_forest_lightgbm_rank_profile_sets_defaults(tmp_path, monkeypatch, capsys) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_dir = artifact_root / "p1_ensemble_round2" / "ensemble_random_forest_lightgbm_regressor_rank"
+    artifact_dir.mkdir(parents=True)
+    for file_name in ("backtest_summary.csv", "backtest_records.csv", "predictions.csv"):
+        (artifact_dir / file_name).write_text("dummy\n", encoding="utf-8")
+
+    def _run_command(args):
+        return {
+            "command": "run",
+            "ok": True,
+            "summary": {"decision": "executed"},
+            "preflight": {"allowed": True},
+            "run": {"report": {"run_id": "run-smoke-rf-lgbm-rank"}},
+            "post_run": {"ok": True},
+            "error": None,
+        }
+
+    monkeypatch.setattr(paper_smoke.paper_daily, "run_command", _run_command)
+
+    exit_code = paper_smoke.main(
+        [
+            "--strategy-profile",
+            "us_random_forest_lightgbm_rank_daily",
+            "--artifact-root",
+            str(artifact_root),
+            "--ledger-path",
+            str(tmp_path / "ledger.sqlite3"),
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["strategy_profile"] == "us_random_forest_lightgbm_rank_daily"
+    assert output["model"] == "ensemble_random_forest_lightgbm_regressor_rank"
+    assert output["run_name"] == "us-random-forest-lightgbm-rank-daily"

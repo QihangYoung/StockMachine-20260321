@@ -5,12 +5,16 @@ from sklearn.pipeline import Pipeline
 
 from stockmachine.research.us_equities_baseline import (
     FEATURE_COLUMNS,
+    build_catboost_regressor,
     build_elastic_net_pipeline,
     build_extra_trees_model,
     build_hist_gbm_model,
     build_huber_pipeline,
+    build_lightgbm_regressor,
+    build_lightgbm_ranker,
     build_random_forest_model,
     build_ridge_pipeline,
+    build_xgboost_regressor,
     get_trainable_model_builder,
 )
 
@@ -35,11 +39,19 @@ def test_trainable_model_builders_return_pipelines() -> None:
         "hist_gbm",
         "extra_trees",
         "random_forest",
+        "lightgbm_regressor",
+        "lightgbm_ranker",
+        "catboost_regressor",
+        "xgboost_regressor",
     )
 
     for name in builder_names:
         model = get_trainable_model_builder(name)()
-        assert isinstance(model, Pipeline)
+        if name == "lightgbm_ranker":
+            assert hasattr(model, "fit")
+            assert hasattr(model, "predict")
+        else:
+            assert isinstance(model, Pipeline)
 
 
 def test_trainable_model_pipelines_fit_and_predict() -> None:
@@ -53,6 +65,9 @@ def test_trainable_model_pipelines_fit_and_predict() -> None:
         build_hist_gbm_model,
         build_extra_trees_model,
         build_random_forest_model,
+        build_lightgbm_regressor,
+        build_catboost_regressor,
+        build_xgboost_regressor,
     )
 
     for builder in builders:
@@ -61,3 +76,15 @@ def test_trainable_model_pipelines_fit_and_predict() -> None:
         predictions = model.predict(train_x)
         assert len(predictions) == len(train_x)
 
+
+def test_lightgbm_ranker_builder_fit_and_predict() -> None:
+    train_x = _toy_feature_frame()
+    train_x.insert(0, "symbol", [f"S{i}" for i in range(len(train_x))])
+    train_x.insert(0, "date", pd.to_datetime(["2025-01-02"] * 4 + ["2025-01-03"] * 4))
+    train_y = _toy_target_series()
+
+    model = build_lightgbm_ranker()
+    model.fit(train_x, train_y, group=[4, 4])
+    predictions = model.predict(train_x)
+
+    assert len(predictions) == len(train_x)
