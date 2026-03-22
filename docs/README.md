@@ -5,12 +5,14 @@
 - `alpaca-paper-demo-plan.md`: formal plan, workstream split, and acceptance criteria for the Alpaca paper demo
 - `paper-productization-plan.md`: phased hardening plan to turn the Alpaca paper demo into a daily-operable system
 - `paper-operator-playbook.md`: concise daily operator runbook for smoke, reconcile, and maintenance
+- `p0-research-rigor-report.md`: strict-rerun findings after point-in-time and formal walk-forward hardening
 - `project-status-2026-03-22.md`: current module progress, milestone state, and next recommended directions
 - `backlog.md`: prioritized implementation backlog and delivery gates
 - `merge-guide.md`: integration map, contract boundaries, and merge checklist for external contributors
 - `canonical-schemas.md`: internal silver-table contracts and key fields
 - `data-strategy.md`: source selection, ingestion plan, and crawler scope
 - `evaluation-protocol.md`: timing rules, walk-forward validation, and pass gates
+- `research-protocol.md`: frozen P0 contract for timing, point-in-time universe, and splitter defaults
 - `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
 - `model-design.md`: predictive model framing and decision checklist
 - `roadmap.md`: suggested delivery order from research to production

@@ -47,7 +47,7 @@ from stockmachine.research.us_equities_baseline import (
     BENCHMARK_SYMBOL,
     DEFAULT_UNIVERSE,
     OverlayConfig,
-    build_metadata_from_silver,
+    build_point_in_time_metadata_history,
     build_price_panel_from_silver,
     build_research_frame,
     generate_walk_forward_predictions,
@@ -283,7 +283,11 @@ class SilverWalkForwardSignalModel:
         effective_date = self.dataset_cache.resolve_session_date(session_date)
 
         price_data = build_price_panel_from_silver(dataset)
-        metadata = build_metadata_from_silver(dataset)
+        metadata = build_point_in_time_metadata_history(
+            pd.Index(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"].drop_duplicates().sort_values()),
+            symbol_master_frame=dataset["symbol_master"],
+            industry_membership_frame=dataset["industry_membership"],
+        )
         research_frame = build_research_frame(
             price_data,
             benchmark_symbol=BENCHMARK_SYMBOL,

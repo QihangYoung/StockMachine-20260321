@@ -39,6 +39,8 @@ from stockmachine.research.comparison import (
     slice_frame_by_windows,
     validate_aligned_frames,
 )
+from stockmachine.research.splitting import WalkForwardSplit, WalkForwardSplitConfig, build_walk_forward_splits
+from stockmachine.research.universe import build_point_in_time_metadata_history
 
 
 DEFAULT_UNIVERSE: tuple[str, ...] = (
@@ -281,7 +283,11 @@ def run_silver_chain_backtest(
 
     dataset = load_us_equities_dataset(layout=storage)
     price_data = build_price_panel_from_silver(dataset)
-    metadata = build_metadata_from_silver(dataset)
+    metadata = build_point_in_time_metadata_history(
+        pd.Index(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"].drop_duplicates().sort_values()),
+        symbol_master_frame=dataset["symbol_master"],
+        industry_membership_frame=dataset["industry_membership"],
+    )
     research_frame = build_research_frame(
         price_data,
         benchmark_symbol=BENCHMARK_SYMBOL,
@@ -542,7 +548,13 @@ def build_research_frame(
     panel["target"] = panel["future_return"] - panel["benchmark_future_return"]
 
     if symbol_metadata is not None:
-        panel = panel.merge(symbol_metadata, on="symbol", how="left")
+        merge_keys = ["symbol"]
+        if "date" in symbol_metadata.columns:
+            merge_keys = ["date", "symbol"]
+        panel = panel.merge(symbol_metadata, on=merge_keys, how="left", indicator="_metadata_match")
+        if merge_keys == ["date", "symbol"]:
+            panel = panel.loc[panel["_metadata_match"] == "both"].copy()
+        panel = panel.drop(columns="_metadata_match")
         panel["sector"] = panel["sector"].fillna("Unknown")
         panel["industry"] = panel["industry"].fillna("Unknown")
     else:
@@ -653,38 +665,131 @@ def generate_walk_forward_predictions(
     panel: pd.DataFrame,
     *,
     predict_start: str,
-    train_window_days: int = 756,
+    train_window_days: int | None = None,
+    validation_window_days: int | None = None,
+    test_window_days: int | None = None,
+    purge_window_days: int | None = None,
+    embargo_window_days: int | None = None,
+    roll_frequency: str | None = None,
+    include_validation_in_training: bool = True,
 ) -> pd.DataFrame:
-    """Generate monthly walk-forward predictions for all baseline models."""
+    """Generate walk-forward predictions using the shared P0 research protocol."""
 
     panel = panel.copy()
-    panel["month"] = panel["date"].dt.to_period("M")
-    prediction_months = sorted(month for month in panel["month"].unique() if month.start_time >= pd.Timestamp(predict_start))
+    predict_start_ts = pd.Timestamp(predict_start).normalize()
+    split_config = _build_walk_forward_split_config(
+        train_window_days=train_window_days,
+        validation_window_days=validation_window_days,
+        test_window_days=test_window_days,
+        purge_window_days=purge_window_days,
+        embargo_window_days=embargo_window_days,
+        roll_frequency=roll_frequency,
+    )
+    splits = build_walk_forward_splits(panel, config=split_config)
 
     prediction_frames: list[pd.DataFrame] = []
-    for month in prediction_months:
-        month_start = month.start_time
-        test_mask = panel["month"] == month
-        train_mask = (panel["date"] < month_start) & (panel["date"] >= month_start - pd.Timedelta(days=train_window_days))
-
-        train_frame = panel.loc[train_mask].copy()
-        test_frame = panel.loc[test_mask].copy()
-        if train_frame.empty or test_frame.empty:
+    for split in splits:
+        test_frame = split.test_frame.loc[split.test_frame["date"] >= predict_start_ts].copy()
+        if test_frame.empty:
             continue
 
-        month_prediction_frames: dict[str, pd.DataFrame] = {}
+        train_frame = _compose_walk_forward_train_frame(
+            split,
+            include_validation_in_training=include_validation_in_training,
+        )
+        if train_frame.empty:
+            continue
+
+        split_prediction_frames: dict[str, pd.DataFrame] = {}
         for model_name in BASE_MODEL_NAMES:
-            month_prediction_frames[model_name] = fit_predict_base_model(
+            predictions = fit_predict_base_model(
                 model_name,
                 train_frame=train_frame,
                 test_frame=test_frame,
             )
+            split_prediction_frames[model_name] = _attach_split_metadata(predictions, split)
 
-        prediction_frames.extend(month_prediction_frames.values())
-        prediction_frames.extend(build_ensemble_prediction_frames(month_prediction_frames))
+        prediction_frames.extend(split_prediction_frames.values())
+        prediction_frames.extend(
+            _attach_split_metadata(frame, split)
+            for frame in build_ensemble_prediction_frames(split_prediction_frames)
+        )
+
+    if not prediction_frames:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "symbol",
+                "sector",
+                "industry",
+                "close",
+                "vol_20",
+                "median_dollar_volume_20",
+                "target",
+                "future_return",
+                "benchmark_future_return",
+                "score",
+                "confidence",
+                "model",
+                "split_fold_index",
+                "split_anchor_date",
+                "split_test_start",
+                "split_test_end",
+            ]
+        )
 
     predictions = pd.concat(prediction_frames, ignore_index=True)
+    predictions["split_anchor_date"] = pd.to_datetime(predictions["split_anchor_date"], utc=False)
+    predictions = predictions.sort_values(
+        ["model", "date", "symbol", "split_anchor_date", "score"],
+        ascending=[True, True, True, True, False],
+    )
+    predictions = predictions.drop_duplicates(subset=["model", "date", "symbol"], keep="last")
     return predictions.sort_values(["model", "date", "score"], ascending=[True, True, False]).reset_index(drop=True)
+
+
+def _build_walk_forward_split_config(
+    *,
+    train_window_days: int | None,
+    validation_window_days: int | None,
+    test_window_days: int | None,
+    purge_window_days: int | None,
+    embargo_window_days: int | None,
+    roll_frequency: str | None,
+) -> WalkForwardSplitConfig:
+    base_config = WalkForwardSplitConfig()
+    return WalkForwardSplitConfig(
+        train_window_days=train_window_days or base_config.train_window_days,
+        validation_window_days=validation_window_days or base_config.validation_window_days,
+        test_window_days=test_window_days or base_config.test_window_days,
+        purge_window_days=base_config.purge_window_days if purge_window_days is None else purge_window_days,
+        embargo_window_days=base_config.embargo_window_days if embargo_window_days is None else embargo_window_days,
+        roll_frequency=roll_frequency or base_config.roll_frequency,
+        date_column=base_config.date_column,
+    )
+
+
+def _compose_walk_forward_train_frame(
+    split: WalkForwardSplit,
+    *,
+    include_validation_in_training: bool,
+) -> pd.DataFrame:
+    if not include_validation_in_training:
+        return split.train_frame.copy()
+    return (
+        pd.concat([split.train_frame, split.validation_frame], ignore_index=True)
+        .sort_values(["date", "symbol"])
+        .reset_index(drop=True)
+    )
+
+
+def _attach_split_metadata(frame: pd.DataFrame, split: WalkForwardSplit) -> pd.DataFrame:
+    tagged = frame.copy()
+    tagged["split_fold_index"] = split.fold_index
+    tagged["split_anchor_date"] = split.anchor_date
+    tagged["split_test_start"] = split.test_start
+    tagged["split_test_end"] = split.test_end
+    return tagged
 
 
 def build_ensemble_prediction_frames(

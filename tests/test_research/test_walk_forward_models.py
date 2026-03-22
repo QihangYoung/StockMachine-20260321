@@ -67,7 +67,11 @@ def test_generate_walk_forward_predictions_includes_new_base_models() -> None:
     predictions = generate_walk_forward_predictions(
         panel,
         predict_start="2025-03-01",
-        train_window_days=60,
+        train_window_days=20,
+        validation_window_days=5,
+        test_window_days=10,
+        purge_window_days=1,
+        embargo_window_days=0,
     )
 
     produced_models = set(predictions["model"].unique())
@@ -81,4 +85,4 @@ def test_generate_walk_forward_predictions_includes_new_base_models() -> None:
         model_predictions = predictions[predictions["model"] == model_name]
         assert not model_predictions.empty
         assert model_predictions["date"].min() >= pd.Timestamp("2025-03-01")
-
+    assert not predictions.duplicated(subset=["model", "date", "symbol"]).any()

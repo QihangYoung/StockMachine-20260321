@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+from stockmachine.data.loaders.silver import load_silver_table
 from stockmachine.ingestion.storage import StorageLayout, write_jsonl
 from stockmachine.research.us_equities_baseline import BENCHMARK_SYMBOL, DEFAULT_UNIVERSE
 
@@ -46,6 +47,90 @@ def bootstrap_us_equities_yahoo_to_silver(
         "daily_bar_rows": len(daily_rows),
         "adj_factor_rows": len(adj_factor_rows),
         "benchmark_index_rows": len(benchmark_rows),
+    }
+
+
+def backfill_static_metadata_history_from_silver(
+    *,
+    layout: StorageLayout | None = None,
+) -> dict[str, int]:
+    """Expand the latest static research metadata across historical session dates.
+
+    This is an explicit bootstrap helper for the current fixed US-equities
+    research universe. It does not create true historical constituent history;
+    instead, it materializes one static metadata snapshot per observed session so
+    the point-in-time universe contract can operate without future-dated rows.
+    """
+
+    storage = layout or StorageLayout()
+    daily_bar = load_silver_table("daily_bar", layout=storage)
+    symbol_master = load_silver_table("symbol_master", layout=storage)
+    industry_membership = load_silver_table("industry_membership", layout=storage)
+
+    if daily_bar.empty or symbol_master.empty:
+        return {
+            "session_dates": 0,
+            "symbols": 0,
+            "symbol_master_rows": 0,
+            "industry_membership_rows": 0,
+        }
+
+    session_dates = (
+        pd.to_datetime(daily_bar["session_date"], errors="coerce")
+        .dropna()
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    if not session_dates:
+        return {
+            "session_dates": 0,
+            "symbols": 0,
+            "symbol_master_rows": 0,
+            "industry_membership_rows": 0,
+        }
+
+    active_symbols = set(daily_bar["symbol"].dropna().astype(str).unique().tolist())
+    latest_symbol_master = _latest_rows_by_key(symbol_master, key_columns=("symbol",))
+    latest_symbol_master = latest_symbol_master.loc[
+        latest_symbol_master["symbol"].astype(str).isin(active_symbols)
+    ].copy()
+    latest_industry = _latest_rows_by_key(
+        industry_membership,
+        key_columns=("symbol", "industry_system"),
+    )
+    latest_industry = latest_industry.loc[
+        latest_industry["symbol"].astype(str).isin(active_symbols)
+    ].copy()
+
+    load_time_utc = datetime.now(timezone.utc).isoformat()
+    source_version = "static_history_backfill_v1"
+    symbol_rows = _expand_static_snapshot_rows(
+        latest_symbol_master,
+        session_dates=session_dates,
+        load_time_utc=load_time_utc,
+        source_version=source_version,
+    )
+    industry_rows = _expand_static_snapshot_rows(
+        latest_industry,
+        session_dates=session_dates,
+        load_time_utc=load_time_utc,
+        source_version=source_version,
+    )
+
+    write_jsonl(
+        storage.silver_table_dir("symbol_master") / "static_history_backfill.jsonl",
+        symbol_rows,
+    )
+    write_jsonl(
+        storage.silver_table_dir("industry_membership") / "static_history_backfill.jsonl",
+        industry_rows,
+    )
+    return {
+        "session_dates": len(session_dates),
+        "symbols": len(active_symbols),
+        "symbol_master_rows": len(symbol_rows),
+        "industry_membership_rows": len(industry_rows),
     }
 
 
@@ -229,6 +314,41 @@ def _build_industry_rows(
                 "source_version": "bootstrap_v1",
             }
         )
+    return rows
+
+
+def _latest_rows_by_key(frame: pd.DataFrame, *, key_columns: tuple[str, ...]) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+
+    working = frame.copy()
+    if "as_of_date" in working.columns:
+        working["as_of_date"] = pd.to_datetime(working["as_of_date"], errors="coerce")
+    sort_columns = [column for column in ("as_of_date", "load_time_utc") if column in working.columns]
+    if sort_columns:
+        working = working.sort_values([*key_columns, *sort_columns], kind="stable", na_position="last")
+    return working.drop_duplicates(subset=list(key_columns), keep="last").reset_index(drop=True)
+
+
+def _expand_static_snapshot_rows(
+    frame: pd.DataFrame,
+    *,
+    session_dates: list[pd.Timestamp],
+    load_time_utc: str,
+    source_version: str,
+) -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for session_date in session_dates:
+        as_of_date = str(pd.Timestamp(session_date).date())
+        for row in frame.to_dict(orient="records"):
+            payload = dict(row)
+            payload["as_of_date"] = as_of_date
+            payload["load_time_utc"] = load_time_utc
+            payload["source_version"] = source_version
+            rows.append(payload)
     return rows
 
 

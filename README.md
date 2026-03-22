@@ -34,6 +34,9 @@ See [docs/architecture.md](docs/architecture.md) for the full module map,
 [docs/us-equities-v1.md](docs/us-equities-v1.md) for the frozen first scope,
 and [docs/model-design.md](docs/model-design.md) for predictive model framing.
 For Alpaca setup and credential checks, see [docs/alpaca-setup.md](docs/alpaca-setup.md).
+For the current strict research contract and rerun findings, see
+[docs/research-protocol.md](docs/research-protocol.md) and
+[docs/p0-research-rigor-report.md](docs/p0-research-rigor-report.md).
 
 ## Current Status
 
@@ -126,13 +129,53 @@ python -m stockmachine.apps.run_us_equities_silver_chain --model hist_gbm --pred
 This bridge is for research plumbing only and should later be replaced by our
 official ingestion sources.
 
+## Research Rigor Workflow
+
+The first P0 hardening pass now freezes:
+
+- point-in-time metadata joins
+- formal walk-forward splitting
+- purge and embargo defaults
+- protocol-aware model sweep outputs
+
+The frozen contract lives in:
+
+- [docs/research-protocol.md](docs/research-protocol.md)
+
+The first strict-rerun findings live in:
+
+- [docs/p0-research-rigor-report.md](docs/p0-research-rigor-report.md)
+
+Before strict reruns, the current fixed US-equities research universe can be
+bootstrapped into session-scoped metadata history with:
+
+```text
+$env:PYTHONPATH='src'
+@'
+from stockmachine.ingestion.jobs import backfill_static_metadata_history_from_silver
+print(backfill_static_metadata_history_from_silver())
+'@ | python -
+```
+
+Then rerun the current top models under the strict protocol with:
+
+```text
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_us_equities_model_sweep --models factor_baseline hist_gbm random_forest lightgbm_regressor ensemble_hist_gbm_random_forest_rank ensemble_random_forest_lightgbm_regressor_rank --predict-start 2025-01-01 --output-root artifacts/p0_rigor_rerun
+```
+
+Each sweep now writes:
+
+- `summary_metrics.csv`
+- `research_protocol.json`
+
 ## Next Suggested Milestones
 
 1. Continue paper-demo productization with scheduler-friendly daily runs.
 2. Harden restart recovery, lingering-order maintenance, and operator automation.
 3. Add websocket `trade_updates` handling for faster order-state convergence.
 4. Extract the paper signal path out of the research module into a cleaner alpha runtime layer.
-5. Harden point-in-time universe metadata and live-cost attribution.
+5. Move from P0 rigor hardening to P1 stability, cost-stress, and parameter-robustness analysis.
 
 ## Paper Demo
 

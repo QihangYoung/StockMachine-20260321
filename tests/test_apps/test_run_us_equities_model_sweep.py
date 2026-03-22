@@ -47,10 +47,12 @@ def test_model_sweep_writes_summary_csv_and_creates_directories(tmp_path, monkey
     payload = json.loads(capsys.readouterr().out)
 
     summary_path = tmp_path / "sweep" / "summary_metrics.csv"
+    protocol_path = tmp_path / "sweep" / "research_protocol.json"
     assert exit_code == 0
     assert payload["ok"] is True
     assert payload["counts"] == {"requested": 2, "success": 2, "failed": 0}
     assert summary_path.exists()
+    assert protocol_path.exists()
     assert (tmp_path / "sweep" / "hist_gbm").exists()
     assert (tmp_path / "sweep" / "random_forest").exists()
     frame = pd.read_csv(summary_path)
@@ -58,6 +60,8 @@ def test_model_sweep_writes_summary_csv_and_creates_directories(tmp_path, monkey
     assert list(frame["status"]) == ["success", "success"]
     assert set(frame["predict_start"]) == {"2025-01-01"}
     assert list(frame["total_return"]) == [0.34, 0.34]
+    assert payload["research_protocol"]["walk_forward"]["train_window_months"] == 36
+    assert payload["research_protocol_path"] == str(protocol_path)
     assert len(calls) == 2
     assert calls[0]["output_dir"] == tmp_path / "sweep" / "hist_gbm"
     assert calls[1]["output_dir"] == tmp_path / "sweep" / "random_forest"
@@ -83,11 +87,13 @@ def test_model_sweep_handles_empty_model_list(tmp_path, monkeypatch, capsys) -> 
     payload = json.loads(capsys.readouterr().out)
 
     summary_path = tmp_path / "empty" / "summary_metrics.csv"
+    protocol_path = tmp_path / "empty" / "research_protocol.json"
     assert exit_code == 1
     assert payload["ok"] is False
     assert payload["empty_models"] is True
     assert payload["error"]["message"] == "No models were provided."
     assert summary_path.exists()
+    assert protocol_path.exists()
     frame = pd.read_csv(summary_path)
     assert frame.empty
     assert list(frame.columns) == list(sweep.DEFAULT_SWEEP_COLUMNS)

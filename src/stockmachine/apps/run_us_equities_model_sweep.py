@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from stockmachine.research import get_default_research_protocol
 from stockmachine.research.us_equities_baseline import OverlayConfig, run_silver_chain_backtest
 
 
@@ -59,6 +60,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run_model_sweep(args: argparse.Namespace) -> dict[str, Any]:
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
+    research_protocol = get_default_research_protocol()
 
     models = [str(model).strip() for model in getattr(args, "models", ()) if str(model).strip()]
     overlay_config = OverlayConfig(
@@ -114,6 +116,11 @@ def run_model_sweep(args: argparse.Namespace) -> dict[str, Any]:
     summary_frame = pd.DataFrame(rows, columns=DEFAULT_SWEEP_COLUMNS)
     summary_path = output_root / "summary_metrics.csv"
     summary_frame.to_csv(summary_path, index=False)
+    protocol_path = output_root / "research_protocol.json"
+    protocol_path.write_text(
+        json.dumps(research_protocol.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
     payload = {
         "command": "sweep",
@@ -122,6 +129,8 @@ def run_model_sweep(args: argparse.Namespace) -> dict[str, Any]:
         "predict_start": args.predict_start,
         "output_root": str(output_root),
         "summary_metrics_path": str(summary_path),
+        "research_protocol_path": str(protocol_path),
+        "research_protocol": research_protocol.to_dict(),
         "overlay_config": asdict(overlay_config),
         "counts": {
             "requested": len(models),
