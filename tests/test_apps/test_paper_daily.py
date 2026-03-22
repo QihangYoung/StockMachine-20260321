@@ -321,3 +321,17 @@ def test_parse_args_supports_random_forest_lightgbm_rank_strategy_profile() -> N
     assert args.strategy_profile == "us_random_forest_lightgbm_rank_daily"
     assert args.model == "ensemble_random_forest_lightgbm_regressor_rank"
     assert args.run_name == "us-random-forest-lightgbm-rank-daily"
+
+
+def test_parse_args_supports_hist_gbm_random_forest_lightgbm_rank_strategy_profile() -> None:
+    args = paper_daily.parse_args(
+        [
+            "run",
+            "--strategy-profile",
+            "us_hist_gbm_random_forest_lightgbm_rank_daily",
+        ]
+    )
+
+    assert args.strategy_profile == "us_hist_gbm_random_forest_lightgbm_rank_daily"
+    assert args.model == "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank"
+    assert args.run_name == "us-hist-gbm-random-forest-lightgbm-rank-daily"

@@ -1,0 +1,22 @@
+{
+  "profile_id": "us_hist_gbm_random_forest_lightgbm_rank_daily",
+  "description": "US daily paper profile backed by the rank-average blend of hist_gbm, random_forest, and lightgbm_regressor.",
+  "run_name": "us-hist-gbm-random-forest-lightgbm-rank-daily",
+  "model": "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank",
+  "top_k": 10,
+  "horizon": 5,
+  "min_close": 10.0,
+  "min_median_dollar_volume_20": 50000000.0,
+  "max_vol_20": 0.04,
+  "max_positions_per_sector": 2,
+  "disable_sector_neutral": false,
+  "require_market_open": false,
+  "min_buying_power_buffer": 0.0,
+  "max_order_notional": null,
+  "max_total_notional": null,
+  "max_total_orders": null,
+  "execution_equity_cap": null,
+  "post_submit_poll_seconds": 15.0,
+  "post_submit_poll_interval_seconds": 2.0,
+  "artifact_model": "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank"
+}
