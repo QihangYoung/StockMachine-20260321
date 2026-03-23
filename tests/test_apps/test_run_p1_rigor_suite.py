@@ -13,9 +13,14 @@ def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsy
         predict_start = "2025-01-01"
         horizon = 5
 
-    def _build_bundle(*, predict_start: str, horizon: int):
+    def _build_bundle(*, predict_start: str, horizon: int, cache_dir=None, reuse_cache=True, rebuild_cache=False):
         assert predict_start == "2025-01-01"
         assert horizon == 5
+        assert str(cache_dir).endswith("artifacts\\cache\\p1_rigor_suite") or str(cache_dir).endswith(
+            "artifacts/cache/p1_rigor_suite"
+        )
+        assert reuse_cache is True
+        assert rebuild_cache is False
         return _Bundle()
 
     def _strict_sweep(bundle, *, model_names, output_root, top_k, overlay_config):
@@ -87,6 +92,7 @@ def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsy
 
     assert exit_code == 0
     assert payload["analysis_models"] == ["hist_gbm"]
+    assert payload["cache"]["enabled"] is True
     assert (tmp_path / "strict_full" / "summary_metrics.csv").exists()
     assert (tmp_path / "stability" / "yearly_summary.csv").exists()
     assert (tmp_path / "cost_stress" / "summary_metrics.csv").exists()

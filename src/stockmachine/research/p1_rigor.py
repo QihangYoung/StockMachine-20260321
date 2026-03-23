@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
+from stockmachine.alpha import list_alpha_experts
 from stockmachine.backtest import DailyOpenHoldBacktestEngine, DataFrameSignalModel
 from stockmachine.data.loaders import load_us_equities_dataset
 from stockmachine.execution import NextOpenOrderExecutionPolicy
@@ -41,6 +46,26 @@ STRICT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "mean_turnover",
     "mean_cost_bps",
 )
+STRICT_BUNDLE_CACHE_VERSION = 1
+PREDICTION_CACHE_VERSION = 1
+STRICT_CACHE_DATASET_TABLES: tuple[str, ...] = (
+    "universe_membership",
+    "daily_bar",
+    "adj_factor",
+    "benchmark_index",
+    "industry_membership",
+    "symbol_master",
+)
+STRICT_CACHE_DEPENDENCY_PACKAGES: tuple[str, ...] = (
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "lightgbm",
+    "xgboost",
+    "catboost",
+    "torch",
+)
+STRICT_CACHE_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(slots=True, frozen=True)
@@ -52,6 +77,20 @@ class StrictResearchBundle:
     dataset: Mapping[str, pd.DataFrame]
     research_frame: pd.DataFrame
     predictions: pd.DataFrame
+    bundle_cache_key: str | None = None
+    prediction_cache_key: str | None = None
+    bundle_cache_hit: bool = False
+    prediction_cache_hit: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class RepositoryCacheState:
+    """Repository state used to determine whether cache reuse is safe."""
+
+    head: str
+    clean: bool
+    cache_allowed: bool
+    reason: str
 
 
 def _resolve_research_session_dates(price_data: pd.DataFrame) -> pd.Index:
@@ -107,15 +146,390 @@ def _require_explicit_universe_membership_coverage(
         )
 
 
+def _build_repository_cache_state() -> RepositoryCacheState:
+    try:
+        head = _run_git_command("rev-parse", "HEAD").strip()
+        status_output = _run_git_command("status", "--porcelain")
+    except RuntimeError as exc:
+        return RepositoryCacheState(
+            head="unavailable",
+            clean=False,
+            cache_allowed=False,
+            reason=f"git_unavailable:{exc}",
+        )
+
+    clean = status_output.strip() == ""
+    if not clean:
+        return RepositoryCacheState(
+            head=head,
+            clean=False,
+            cache_allowed=False,
+            reason="repository_dirty",
+        )
+    return RepositoryCacheState(
+        head=head,
+        clean=True,
+        cache_allowed=True,
+        reason="clean",
+    )
+
+
+def _run_git_command(*args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(STRICT_CACHE_REPOSITORY_ROOT), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
+    return result.stdout
+
+
+def _collect_dependency_versions() -> dict[str, str]:
+    versions = {"python": sys.version.split()[0]}
+    for package_name in STRICT_CACHE_DEPENDENCY_PACKAGES:
+        try:
+            versions[package_name] = importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            continue
+    return versions
+
+
+def _build_alpha_registry_snapshot() -> list[dict[str, object]]:
+    return [spec.to_dict() for spec in list_alpha_experts()]
+
+
+def _build_silver_input_fingerprint(layout: StorageLayout) -> dict[str, object]:
+    root = layout.root.resolve()
+    tables: dict[str, object] = {}
+    for table_name in STRICT_CACHE_DATASET_TABLES:
+        table_dir = layout.silver_table_dir(table_name)
+        if not table_dir.exists():
+            tables[table_name] = {"present": False, "files": []}
+            continue
+
+        files: list[dict[str, object]] = []
+        for path in sorted(table_dir.glob("*.jsonl")):
+            stat = path.stat()
+            files.append(
+                {
+                    "name": path.name,
+                    "size_bytes": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "sha256": _hash_file_contents(path),
+                }
+            )
+        tables[table_name] = {"present": True, "files": files}
+
+    return {
+        "layout_root": str(root),
+        "tables": tables,
+    }
+
+
+def _hash_file_contents(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_bundle_cache_signature(
+    *,
+    layout: StorageLayout,
+    horizon: int,
+    repository_state: RepositoryCacheState,
+) -> dict[str, object]:
+    return {
+        "cache_kind": "strict_bundle",
+        "cache_version": STRICT_BUNDLE_CACHE_VERSION,
+        "repository_commit": repository_state.head,
+        "dependency_versions": _collect_dependency_versions(),
+        "protocol": get_default_research_protocol().to_dict(),
+        "horizon": int(horizon),
+        "universe_name": DEFAULT_RESEARCH_UNIVERSE_NAME,
+        "silver_inputs": _build_silver_input_fingerprint(layout),
+    }
+
+
+def _build_prediction_cache_signature(
+    *,
+    bundle_key: str,
+    predict_start: str,
+) -> dict[str, object]:
+    return {
+        "cache_kind": "prediction",
+        "cache_version": PREDICTION_CACHE_VERSION,
+        "bundle_cache_key": bundle_key,
+        "predict_start": str(predict_start),
+        "alpha_registry": _build_alpha_registry_snapshot(),
+    }
+
+
+def _make_cache_key(payload: Mapping[str, object]) -> str:
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _normalize_manifest(payload: Mapping[str, object]) -> dict[str, object]:
+    return json.loads(json.dumps(payload, sort_keys=True))
+
+
+def _strict_bundle_cache_dir(cache_dir: str | Path, bundle_key: str) -> Path:
+    return Path(cache_dir) / "strict_bundle" / bundle_key
+
+
+def _prediction_cache_dir(bundle_cache_dir: Path, prediction_key: str) -> Path:
+    return bundle_cache_dir / "predictions" / prediction_key
+
+
+def _bundle_manifest_path(bundle_cache_dir: Path) -> Path:
+    return bundle_cache_dir / "manifest.json"
+
+
+def _prediction_manifest_path(prediction_cache_dir: Path) -> Path:
+    return prediction_cache_dir / "manifest.json"
+
+
+def _bundle_dataset_path(bundle_cache_dir: Path, table_name: str) -> Path:
+    return bundle_cache_dir / f"{table_name}.pkl"
+
+
+def _bundle_price_data_path(bundle_cache_dir: Path) -> Path:
+    return bundle_cache_dir / "price_data.pkl"
+
+
+def _bundle_metadata_path(bundle_cache_dir: Path) -> Path:
+    return bundle_cache_dir / "metadata.pkl"
+
+
+def _bundle_research_frame_path(bundle_cache_dir: Path) -> Path:
+    return bundle_cache_dir / "research_frame.pkl"
+
+
+def _prediction_frame_path(prediction_cache_dir: Path) -> Path:
+    return prediction_cache_dir / "predictions.pkl"
+
+
+def _read_manifest(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _load_strict_bundle_cache(
+    bundle_cache_dir: Path,
+    *,
+    expected_manifest: Mapping[str, object],
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame] | None:
+    manifest = _read_manifest(_bundle_manifest_path(bundle_cache_dir))
+    if manifest != _normalize_manifest(expected_manifest):
+        return None
+
+    expected_paths = [
+        _bundle_price_data_path(bundle_cache_dir),
+        _bundle_metadata_path(bundle_cache_dir),
+        _bundle_research_frame_path(bundle_cache_dir),
+        *[_bundle_dataset_path(bundle_cache_dir, table_name) for table_name in STRICT_CACHE_DATASET_TABLES],
+    ]
+    if any(not path.exists() for path in expected_paths):
+        return None
+
+    try:
+        dataset = {
+            table_name: pd.read_pickle(_bundle_dataset_path(bundle_cache_dir, table_name))
+            for table_name in STRICT_CACHE_DATASET_TABLES
+        }
+        research_frame = pd.read_pickle(_bundle_research_frame_path(bundle_cache_dir))
+    except Exception:
+        return None
+
+    return dataset, research_frame
+
+
+def _write_strict_bundle_cache(
+    bundle_cache_dir: Path,
+    *,
+    manifest: Mapping[str, object],
+    dataset: Mapping[str, pd.DataFrame],
+    price_data: pd.DataFrame,
+    metadata: pd.DataFrame,
+    research_frame: pd.DataFrame,
+) -> None:
+    bundle_cache_dir.mkdir(parents=True, exist_ok=True)
+    normalized_manifest = _normalize_manifest(manifest)
+    for table_name in STRICT_CACHE_DATASET_TABLES:
+        dataset.get(table_name, pd.DataFrame()).to_pickle(_bundle_dataset_path(bundle_cache_dir, table_name))
+    price_data.to_pickle(_bundle_price_data_path(bundle_cache_dir))
+    metadata.to_pickle(_bundle_metadata_path(bundle_cache_dir))
+    research_frame.to_pickle(_bundle_research_frame_path(bundle_cache_dir))
+    _bundle_manifest_path(bundle_cache_dir).write_text(
+        json.dumps(normalized_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _load_prediction_cache(
+    prediction_cache_dir: Path,
+    *,
+    expected_manifest: Mapping[str, object],
+) -> pd.DataFrame | None:
+    manifest = _read_manifest(_prediction_manifest_path(prediction_cache_dir))
+    if manifest != _normalize_manifest(expected_manifest):
+        return None
+
+    prediction_path = _prediction_frame_path(prediction_cache_dir)
+    if not prediction_path.exists():
+        return None
+
+    try:
+        return pd.read_pickle(prediction_path)
+    except Exception:
+        return None
+
+
+def _write_prediction_cache(
+    prediction_cache_dir: Path,
+    *,
+    manifest: Mapping[str, object],
+    predictions: pd.DataFrame,
+) -> None:
+    prediction_cache_dir.mkdir(parents=True, exist_ok=True)
+    normalized_manifest = _normalize_manifest(manifest)
+    predictions.to_pickle(_prediction_frame_path(prediction_cache_dir))
+    _prediction_manifest_path(prediction_cache_dir).write_text(
+        json.dumps(normalized_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
 def build_strict_research_bundle(
     *,
     predict_start: str,
     horizon: int = 5,
     layout: StorageLayout | None = None,
+    cache_dir: str | Path | None = None,
+    reuse_cache: bool = True,
+    rebuild_cache: bool = False,
 ) -> StrictResearchBundle:
     """Build one strict point-in-time research bundle once and reuse it."""
 
     storage = layout or StorageLayout()
+    repository_state = _build_repository_cache_state()
+
+    bundle_cache_key: str | None = None
+    prediction_cache_key: str | None = None
+    bundle_cache_hit = False
+    prediction_cache_hit = False
+    bundle_cache_dir: Path | None = None
+    bundle_manifest: dict[str, object] | None = None
+
+    dataset: Mapping[str, pd.DataFrame]
+    research_frame: pd.DataFrame
+
+    if cache_dir is not None and repository_state.cache_allowed:
+        bundle_manifest = _build_bundle_cache_signature(
+            layout=storage,
+            horizon=horizon,
+            repository_state=repository_state,
+        )
+        bundle_cache_key = _make_cache_key(bundle_manifest)
+        bundle_cache_dir = _strict_bundle_cache_dir(cache_dir, bundle_cache_key)
+        if reuse_cache and not rebuild_cache:
+            cached_bundle = _load_strict_bundle_cache(bundle_cache_dir, expected_manifest=bundle_manifest)
+            if cached_bundle is not None:
+                dataset, research_frame = cached_bundle
+                bundle_cache_hit = True
+            else:
+                dataset, price_data, metadata, research_frame = _build_uncached_strict_bundle_inputs(
+                    storage=storage,
+                    horizon=horizon,
+                )
+                _write_strict_bundle_cache(
+                    bundle_cache_dir,
+                    manifest=bundle_manifest,
+                    dataset=dataset,
+                    price_data=price_data,
+                    metadata=metadata,
+                    research_frame=research_frame,
+                )
+        else:
+            dataset, price_data, metadata, research_frame = _build_uncached_strict_bundle_inputs(
+                storage=storage,
+                horizon=horizon,
+            )
+            _write_strict_bundle_cache(
+                bundle_cache_dir,
+                manifest=bundle_manifest,
+                dataset=dataset,
+                price_data=price_data,
+                metadata=metadata,
+                research_frame=research_frame,
+            )
+    else:
+        dataset, _, _, research_frame = _build_uncached_strict_bundle_inputs(storage=storage, horizon=horizon)
+
+    if bundle_cache_dir is not None and bundle_cache_key is not None and repository_state.cache_allowed:
+        prediction_manifest = _build_prediction_cache_signature(
+            bundle_key=bundle_cache_key,
+            predict_start=predict_start,
+        )
+        prediction_cache_key = _make_cache_key(prediction_manifest)
+        prediction_dir = _prediction_cache_dir(bundle_cache_dir, prediction_cache_key)
+        if reuse_cache and not rebuild_cache:
+            cached_predictions = _load_prediction_cache(prediction_dir, expected_manifest=prediction_manifest)
+            if cached_predictions is not None:
+                predictions = cached_predictions
+                prediction_cache_hit = True
+            else:
+                predictions = generate_walk_forward_predictions(
+                    research_frame,
+                    predict_start=predict_start,
+                )
+                _write_prediction_cache(
+                    prediction_dir,
+                    manifest=prediction_manifest,
+                    predictions=predictions,
+                )
+        else:
+            predictions = generate_walk_forward_predictions(
+                research_frame,
+                predict_start=predict_start,
+            )
+            _write_prediction_cache(
+                prediction_dir,
+                manifest=prediction_manifest,
+                predictions=predictions,
+            )
+    else:
+        predictions = generate_walk_forward_predictions(
+            research_frame,
+            predict_start=predict_start,
+        )
+    return StrictResearchBundle(
+        predict_start=predict_start,
+        horizon=horizon,
+        dataset=dataset,
+        research_frame=research_frame,
+        predictions=predictions,
+        bundle_cache_key=bundle_cache_key,
+        prediction_cache_key=prediction_cache_key,
+        bundle_cache_hit=bundle_cache_hit,
+        prediction_cache_hit=prediction_cache_hit,
+    )
+
+
+def _build_uncached_strict_bundle_inputs(
+    *,
+    storage: StorageLayout,
+    horizon: int,
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     dataset = load_us_equities_dataset(layout=storage)
     price_data = build_price_panel_from_silver(dataset)
     session_dates = _resolve_research_session_dates(price_data)
@@ -124,30 +538,31 @@ def build_strict_research_bundle(
         universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
         universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
     )
-    metadata = build_point_in_time_metadata_history(
-        session_dates,
-        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
-        symbol_master_frame=dataset["symbol_master"],
-        industry_membership_frame=dataset["industry_membership"],
-        require_snapshot=True,
-        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
-    )
+    metadata = _build_strict_bundle_metadata(dataset, session_dates=session_dates)
     research_frame = build_research_frame(
         price_data,
         benchmark_symbol=BENCHMARK_SYMBOL,
         horizon=horizon,
         symbol_metadata=metadata,
     )
-    predictions = generate_walk_forward_predictions(
-        research_frame,
-        predict_start=predict_start,
-    )
-    return StrictResearchBundle(
-        predict_start=predict_start,
-        horizon=horizon,
-        dataset=dataset,
-        research_frame=research_frame,
-        predictions=predictions,
+    return dataset, price_data, metadata, research_frame
+
+
+def _build_strict_bundle_metadata(
+    dataset: Mapping[str, pd.DataFrame],
+    *,
+    session_dates: pd.Index | None = None,
+) -> pd.DataFrame:
+    if session_dates is None:
+        price_data = build_price_panel_from_silver(dict(dataset))
+        session_dates = _resolve_research_session_dates(price_data)
+    return build_point_in_time_metadata_history(
+        session_dates,
+        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
+        symbol_master_frame=dataset["symbol_master"],
+        industry_membership_frame=dataset["industry_membership"],
+        require_snapshot=True,
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
     )
 
 

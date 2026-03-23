@@ -35,6 +35,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-positions-per-sector", type=int, default=2)
     parser.add_argument("--cost-bps-per-side", type=float, default=10.0)
     parser.add_argument("--disable-sector-neutral", action="store_true")
+    parser.add_argument("--cache-dir", default="artifacts/cache/p1_rigor_suite")
+    parser.add_argument("--disable-cache", action="store_true")
+    parser.add_argument("--rebuild-cache", action="store_true")
     return parser
 
 
@@ -56,6 +59,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     bundle = build_strict_research_bundle(
         predict_start=args.predict_start,
         horizon=args.horizon,
+        cache_dir=None if args.disable_cache else args.cache_dir,
+        reuse_cache=not args.disable_cache,
+        rebuild_cache=bool(args.rebuild_cache),
     )
 
     strict_root = output_root / "strict_full"
@@ -136,6 +142,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "strict_models": int(len(strict_summary)),
             "analysis_models": int(len(analysis_models)),
             "topk_rows": int(len(topk_summary)),
+        },
+        "cache": {
+            "enabled": not args.disable_cache,
+            "cache_dir": None if args.disable_cache else str(Path(args.cache_dir)),
+            "bundle_cache_hit": bool(getattr(bundle, "bundle_cache_hit", False)),
+            "prediction_cache_hit": bool(getattr(bundle, "prediction_cache_hit", False)),
+            "bundle_cache_key": getattr(bundle, "bundle_cache_key", None),
+            "prediction_cache_key": getattr(bundle, "prediction_cache_key", None),
+            "rebuild_cache": bool(args.rebuild_cache),
         },
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
