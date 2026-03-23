@@ -10,7 +10,7 @@ from .models import (
     SubmissionRetryRecord,
     SubmissionRetryReport,
 )
-from .policies import NextOpenOrderExecutionPolicy
+from .policies import NextOpenOrderExecutionPolicy, SameSessionMarketOrderExecutionPolicy
 from .protocols import BrokerAdapter
 
 __all__ = [
@@ -24,4 +24,5 @@ __all__ = [
     "SubmissionRetryRecord",
     "SubmissionRetryReport",
     "NextOpenOrderExecutionPolicy",
+    "SameSessionMarketOrderExecutionPolicy",
 ]

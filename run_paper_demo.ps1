@@ -1,12 +1,12 @@
 param(
-    [string]$Profile = "us_hist_gbm_random_forest_lightgbm_rank_daily",
+    [string]$Profile = "us_extra_trees_daily",
     [string]$SessionDate = (Get-Date -Format "yyyy-MM-dd"),
     [string]$LedgerPath = "artifacts/paper_demo/paper_ledger.sqlite3",
     [string]$ArtifactRoot = "artifacts",
-    [double]$ExecutionEquityCap = 500,
-    [double]$MaxOrderNotional = 550,
-    [double]$MaxTotalNotional = 550,
-    [int]$MaxTotalOrders = 2,
+    [Nullable[double]]$ExecutionEquityCap = $null,
+    [Nullable[double]]$MaxOrderNotional = $null,
+    [Nullable[double]]$MaxTotalNotional = $null,
+    [Nullable[int]]$MaxTotalOrders = $null,
     [switch]$Execute,
     [switch]$AllowUnhealthy,
     [switch]$SkipHealthcheck
@@ -111,12 +111,32 @@ try {
         "--artifact-root", $ArtifactRoot,
         "--ledger-path", $LedgerPath,
         "--execute",
-        "--require-market-open",
-        "--execution-equity-cap", $ExecutionEquityCap.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-        "--max-order-notional", $MaxOrderNotional.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-        "--max-total-notional", $MaxTotalNotional.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-        "--max-total-orders", $MaxTotalOrders.ToString()
+        "--require-market-open"
     )
+    if ($null -ne $ExecutionEquityCap) {
+        $runArgs += @(
+            "--execution-equity-cap",
+            $ExecutionEquityCap.Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        )
+    }
+    if ($null -ne $MaxOrderNotional) {
+        $runArgs += @(
+            "--max-order-notional",
+            $MaxOrderNotional.Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        )
+    }
+    if ($null -ne $MaxTotalNotional) {
+        $runArgs += @(
+            "--max-total-notional",
+            $MaxTotalNotional.Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        )
+    }
+    if ($null -ne $MaxTotalOrders) {
+        $runArgs += @(
+            "--max-total-orders",
+            $MaxTotalOrders.Value.ToString()
+        )
+    }
     if ($AllowUnhealthy) {
         $runArgs += "--allow-unhealthy"
     }

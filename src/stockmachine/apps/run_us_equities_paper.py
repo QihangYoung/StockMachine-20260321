@@ -18,7 +18,7 @@ from stockmachine.alpha import assert_supported_alpha_expert, list_alpha_expert_
 from stockmachine.backtest.protocols import AccountSnapshot, ExecutionPolicy, MarketBar, PortfolioPolicy, SignalModel
 from stockmachine.data.loaders import load_us_equities_dataset
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
-from stockmachine.execution import NextOpenOrderExecutionPolicy
+from stockmachine.execution import SameSessionMarketOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaTradeUpdateStream, AlpacaTradingAdapter
 from stockmachine.execution.brokers import classify_buy_retry_reason, is_retryable_buy_rejection, shrink_quantity_for_retry
 from stockmachine.execution.models import SubmissionRetryRecord, SubmissionRetryReport
@@ -1512,7 +1512,7 @@ def build_alpaca_paper_runner(
             max_positions_per_sector=config.max_positions_per_sector,
             sector_neutral=config.sector_neutral,
         ),
-        execution_policy=NextOpenOrderExecutionPolicy(),
+        execution_policy=SameSessionMarketOrderExecutionPolicy(),
         universe_provider=StaticUniverseProvider(tuple(universe)) if universe else LatestSilverUniverseProvider(dataset_cache),
         account_provider=SyncedAccountProvider(account_sync),
         market_data_provider=LatestSilverBarProvider(dataset_cache),

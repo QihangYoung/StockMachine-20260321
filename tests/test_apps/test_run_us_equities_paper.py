@@ -16,6 +16,7 @@ from stockmachine.apps.run_us_equities_paper import (
 )
 from stockmachine.backtest.protocols import AccountSnapshot, MarketBar
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
+from stockmachine.execution import SameSessionMarketOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaBrokerError
 from stockmachine.live import PollingOrderReconciler
 from stockmachine.live.trade_updates import TradeUpdateMessageSource
@@ -79,6 +80,38 @@ def test_build_alpaca_paper_runner_rejects_non_paper_endpoint(monkeypatch, tmp_p
 
 def test_parse_session_date_round_trips_iso_string() -> None:
     assert parse_session_date("2026-03-21") == date(2026, 3, 21)
+
+
+def test_same_session_market_execution_policy_generates_day_market_orders() -> None:
+    policy = SameSessionMarketOrderExecutionPolicy()
+    account = AccountSnapshot(session_date=date(2026, 3, 23), cash=10_000.0, equity=10_000.0, gross_exposure=0.0)
+    targets = [
+        TargetPosition(
+            symbol="AAPL",
+            target_weight=0.1,
+            max_weight=0.1,
+            reason="test",
+            timestamp=datetime(2026, 3, 23, tzinfo=timezone.utc),
+            meta={},
+        )
+    ]
+    bars = {
+        "AAPL": MarketBar(
+            session_date=date(2026, 3, 23),
+            symbol="AAPL",
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1_000_000.0,
+        )
+    }
+
+    orders = policy.generate_orders(date(2026, 3, 23), targets, bars, account)
+
+    assert len(orders) == 1
+    assert orders[0].order_type == "market"
+    assert orders[0].quantity == 10
 
 
 def test_demo_runner_produces_report_shape() -> None:

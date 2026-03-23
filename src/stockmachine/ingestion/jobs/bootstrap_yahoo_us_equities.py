@@ -17,6 +17,7 @@ def bootstrap_us_equities_yahoo_to_silver(
     start: str = "2019-01-01",
     end: str = "2025-12-31",
     layout: StorageLayout | None = None,
+    silver_file_stem: str = "yahoo_bootstrap",
 ) -> dict[str, int]:
     """Bootstrap canonical silver tables from Yahoo Finance for research."""
 
@@ -44,14 +45,16 @@ def bootstrap_us_equities_yahoo_to_silver(
     )
     daily_rows, benchmark_rows, adj_factor_rows = _build_bar_rows(price_data, load_time_utc=load_time_utc)
 
-    write_jsonl(storage.silver_table_dir("symbol_master") / "yahoo_bootstrap.jsonl", symbol_master_rows)
-    write_jsonl(storage.silver_table_dir("industry_membership") / "yahoo_bootstrap.jsonl", industry_rows)
-    write_jsonl(storage.silver_table_dir("universe_membership") / "yahoo_bootstrap.jsonl", universe_rows)
-    write_jsonl(storage.silver_table_dir("daily_bar") / "yahoo_bootstrap.jsonl", daily_rows)
-    write_jsonl(storage.silver_table_dir("adj_factor") / "yahoo_bootstrap.jsonl", adj_factor_rows)
-    write_jsonl(storage.silver_table_dir("benchmark_index") / "yahoo_bootstrap.jsonl", benchmark_rows)
+    target_filename = f"{silver_file_stem}.jsonl"
+    write_jsonl(storage.silver_table_dir("symbol_master") / target_filename, symbol_master_rows)
+    write_jsonl(storage.silver_table_dir("industry_membership") / target_filename, industry_rows)
+    write_jsonl(storage.silver_table_dir("universe_membership") / target_filename, universe_rows)
+    write_jsonl(storage.silver_table_dir("daily_bar") / target_filename, daily_rows)
+    write_jsonl(storage.silver_table_dir("adj_factor") / target_filename, adj_factor_rows)
+    write_jsonl(storage.silver_table_dir("benchmark_index") / target_filename, benchmark_rows)
 
     return {
+        "silver_file_stem": silver_file_stem,
         "symbol_master_rows": len(symbol_master_rows),
         "industry_membership_rows": len(industry_rows),
         "universe_membership_rows": len(universe_rows),

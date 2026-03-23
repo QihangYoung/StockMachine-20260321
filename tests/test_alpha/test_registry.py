@@ -36,6 +36,9 @@ def test_alpha_registry_lists_supported_baselines() -> None:
         "ensemble_hist_gbm_ridge_random_forest_rank",
         "ensemble_hist_gbm_random_forest_lightgbm_regressor_mean",
         "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank",
+        "ensemble_extra_trees_hist_gbm_rank",
+        "ensemble_extra_trees_lightgbm_ranker_rank",
+        "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
     )
     assert get_alpha_expert("hist_gbm").family == "tree"
     assert get_alpha_expert("ridge").task == "cross_sectional_regression"
@@ -68,6 +71,19 @@ def test_alpha_registry_lists_supported_baselines() -> None:
         "hist_gbm",
         "random_forest",
         "lightgbm_regressor",
+    )
+    assert get_alpha_expert("ensemble_extra_trees_hist_gbm_rank").components == (
+        "extra_trees",
+        "hist_gbm",
+    )
+    assert get_alpha_expert("ensemble_extra_trees_lightgbm_ranker_rank").components == (
+        "extra_trees",
+        "lightgbm_ranker",
+    )
+    assert get_alpha_expert("ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank").components == (
+        "extra_trees",
+        "hist_gbm",
+        "lightgbm_ranker",
     )
 
 

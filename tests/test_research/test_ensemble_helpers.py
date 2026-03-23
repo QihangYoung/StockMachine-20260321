@@ -30,6 +30,8 @@ def test_build_ensemble_prediction_frames_adds_mean_and_rank_blends() -> None:
         "hist_gbm": _prediction_frame(model="hist_gbm", scores=[2.0, -1.0]),
         "ridge": _prediction_frame(model="ridge", scores=[0.8, 0.1]),
         "random_forest": _prediction_frame(model="random_forest", scores=[1.2, -0.2]),
+        "extra_trees": _prediction_frame(model="extra_trees", scores=[1.7, -0.4]),
+        "lightgbm_ranker": _prediction_frame(model="lightgbm_ranker", scores=[0.9, 0.2]),
     }
 
     ensemble_frames = build_ensemble_prediction_frames(frames)
@@ -42,6 +44,9 @@ def test_build_ensemble_prediction_frames_adds_mean_and_rank_blends() -> None:
         "ensemble_hist_gbm_random_forest_rank",
         "ensemble_hist_gbm_ridge_random_forest_mean",
         "ensemble_hist_gbm_ridge_random_forest_rank",
+        "ensemble_extra_trees_hist_gbm_rank",
+        "ensemble_extra_trees_lightgbm_ranker_rank",
+        "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
     }
     for frame in ensemble_frames:
         assert frame["symbol"].tolist() == ["AAPL", "MSFT"]

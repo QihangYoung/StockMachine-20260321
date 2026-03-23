@@ -1,0 +1,22 @@
+{
+  "profile_id": "us_extra_trees_daily",
+  "description": "US daily paper profile backed by the extra_trees expert from the wider-regime strict rerun.",
+  "run_name": "us-extra-trees-daily",
+  "model": "extra_trees",
+  "top_k": 10,
+  "horizon": 5,
+  "min_close": 10.0,
+  "min_median_dollar_volume_20": 50000000.0,
+  "max_vol_20": 0.04,
+  "max_positions_per_sector": 2,
+  "disable_sector_neutral": false,
+  "require_market_open": false,
+  "min_buying_power_buffer": 0.0,
+  "max_order_notional": null,
+  "max_total_notional": null,
+  "max_total_orders": null,
+  "execution_equity_cap": null,
+  "post_submit_poll_seconds": 15.0,
+  "post_submit_poll_interval_seconds": 2.0,
+  "artifact_model": "extra_trees"
+}

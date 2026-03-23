@@ -202,6 +202,30 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         components=("hist_gbm", "random_forest", "lightgbm_regressor"),
         combine_method="rank_average",
     ),
+    "ensemble_extra_trees_hist_gbm_rank": AlphaExpertSpec(
+        name="ensemble_extra_trees_hist_gbm_rank",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Rank-average blend of extra_trees and hist_gbm expert predictions.",
+        components=("extra_trees", "hist_gbm"),
+        combine_method="rank_average",
+    ),
+    "ensemble_extra_trees_lightgbm_ranker_rank": AlphaExpertSpec(
+        name="ensemble_extra_trees_lightgbm_ranker_rank",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Rank-average blend of extra_trees and lightgbm_ranker expert predictions.",
+        components=("extra_trees", "lightgbm_ranker"),
+        combine_method="rank_average",
+    ),
+    "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank": AlphaExpertSpec(
+        name="ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
+        family="ensemble",
+        task="cross_sectional_ranking",
+        description="Rank-average blend of extra_trees, hist_gbm, and lightgbm_ranker expert predictions.",
+        components=("extra_trees", "hist_gbm", "lightgbm_ranker"),
+        combine_method="rank_average",
+    ),
 }
 
 
@@ -234,6 +258,9 @@ def list_alpha_experts() -> tuple[AlphaExpertSpec, ...]:
         "ensemble_hist_gbm_ridge_random_forest_rank",
         "ensemble_hist_gbm_random_forest_lightgbm_regressor_mean",
         "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank",
+        "ensemble_extra_trees_hist_gbm_rank",
+        "ensemble_extra_trees_lightgbm_ranker_rank",
+        "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
     )
     return tuple(_ALPHA_EXPERT_SPECS[name] for name in ordered_names)
 

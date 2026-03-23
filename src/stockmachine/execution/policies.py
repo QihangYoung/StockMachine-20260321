@@ -40,3 +40,37 @@ class NextOpenOrderExecutionPolicy:
                 )
             )
         return orders
+
+
+@dataclass(slots=True)
+class SameSessionMarketOrderExecutionPolicy:
+    """Convert target weights into regular day-market order intents."""
+
+    def generate_orders(
+        self,
+        session_date: date,
+        targets: list[TargetPosition],
+        bars: Mapping[str, MarketBar],
+        account: AccountSnapshot,
+    ) -> list[OrderIntent]:
+        orders = []
+        timestamp = datetime.combine(session_date, time(9, 30))
+        for target in targets:
+            bar = bars.get(target.symbol)
+            if bar is None or bar.open <= 0:
+                continue
+            quantity = int((account.equity * target.target_weight) / bar.open)
+            if quantity <= 0:
+                continue
+            orders.append(
+                OrderIntent(
+                    symbol=target.symbol,
+                    side="BUY",
+                    quantity=quantity,
+                    order_type="market",
+                    limit_price=None,
+                    timestamp=timestamp,
+                    meta=target.meta,
+                )
+            )
+        return orders

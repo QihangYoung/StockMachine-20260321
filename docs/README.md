@@ -7,6 +7,7 @@
 - `paper-operator-playbook.md`: concise daily operator runbook for smoke, reconcile, and maintenance
 - `p0-research-rigor-report.md`: strict-rerun findings after point-in-time and formal walk-forward hardening
 - `p1-research-rigor-report.md`: full-model strict leaderboard plus stability, cost-stress, and `top_k` robustness findings
+- `p1-regime-window-report.md`: wider bull/bear-window strict rerun summary after extending history back to 2014
 - `peer-comparison-backtest-protocol.md`: current full-model strict backtest protocol for external peer replication
 - `peer-comparison-backtest-setting.md`: external-facing strict backtest protocol for peer comparison
 - `project-status-2026-03-22.md`: current module progress, milestone state, and next recommended directions
@@ -16,6 +17,7 @@
 - `data-strategy.md`: source selection, ingestion plan, and crawler scope
 - `evaluation-protocol.md`: timing rules, walk-forward validation, and pass gates
 - `research-protocol.md`: frozen P0 contract for timing, point-in-time universe, and splitter defaults
+- `regime-coverage-backtest.md`: safe historical gap-fill workflow and recommended wider bull/bear test window
 - `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
 - `historical-universe-contract.md`: preferred P2 contract for session-scoped universe membership
 - `sequence-expert-migration-report.md`: first-pass LSTM and Transformer migration scope, dependency strategy, and strict-backtest results

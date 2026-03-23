@@ -168,6 +168,7 @@ The first P1 rigor suite findings live in:
 The first P2 historical-universe contract lives in:
 
 - [docs/historical-universe-contract.md](docs/historical-universe-contract.md)
+- [docs/regime-coverage-backtest.md](docs/regime-coverage-backtest.md)
 
 Before strict reruns, the current fixed US-equities research universe can be
 bootstrapped into session-scoped metadata history with:
@@ -185,6 +186,22 @@ Then rerun the current top models under the strict protocol with:
 ```text
 $env:PYTHONPATH='src'
 python -m stockmachine.apps.run_us_equities_model_sweep --models factor_baseline hist_gbm random_forest lightgbm_regressor ensemble_hist_gbm_random_forest_rank ensemble_random_forest_lightgbm_regressor_rank --predict-start 2025-01-01 --output-root artifacts/p0_rigor_rerun
+```
+
+To safely extend the historical window without overwriting the existing
+`2019+` bootstrap files, backfill the older `2014-2018` gap into a separate
+silver file and rerun metadata backfill with:
+
+```text
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.extend_us_equities_history --start 2014-01-01 --end 2018-12-31 --silver-file-stem yahoo_bootstrap_2014_2018
+```
+
+Then run a wider strict suite that covers both bull and bear regimes with:
+
+```text
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_p1_rigor_suite --predict-start 2018-01-01 --output-root artifacts/p1_rigor_suite_regime_window
 ```
 
 Each sweep now writes:

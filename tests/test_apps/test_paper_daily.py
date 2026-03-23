@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from stockmachine.apps import paper_daily
 from stockmachine.apps.run_us_equities_paper import PaperRunConfig
-from stockmachine.monitoring.reports import build_paper_run_report
+from stockmachine.monitoring.reports import PaperRunFailure, build_paper_run_report
 
 
 def test_run_command_happy_path_uses_builder_and_runner(monkeypatch) -> None:
@@ -242,6 +242,92 @@ def test_run_command_allows_override_for_unhealthy_preflight(monkeypatch) -> Non
     assert calls["closed"] is True
 
 
+def test_run_command_marks_failed_report_as_not_ok(monkeypatch) -> None:
+    class _Runner:
+        def run(self, config):
+            return build_paper_run_report(
+                session_date=config.session_date,
+                dry_run=config.dry_run,
+                stage="completed_with_warnings",
+                counts={"signals": 1, "targets": 1, "orders": 1},
+                run_id="run-failed-123",
+                failures=(
+                    PaperRunFailure(
+                        stage="submit_orders",
+                        reason="alpaca_rejected_order",
+                        details={"message": "opg orders must be submitted before 9:28am"},
+                    ),
+                ),
+                meta={"source": "test"},
+            )
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        paper_daily,
+        "build_paper_daily_preflight",
+        lambda **kwargs: paper_daily.PaperDailyPreflightResult(
+            policy_allowed=True,
+            allowed=True,
+            override_used=False,
+            reasons=(),
+            healthcheck={"healthy": True, "reasons": []},
+            session_guard=None,
+            kill_switch={"active": False, "path": "artifacts/paper_demo/paper_daily.kill", "reason": "absent", "payload": None},
+            effective_session_date=date(2026, 3, 22),
+            data_freshness_meta={"resolution": "exact"},
+        ),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_alpaca_paper_runner",
+        lambda **kwargs: (_Runner(), PaperRunConfig(session_date=date(2026, 3, 22), dry_run=False, universe=("AAPL",))),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_safe_build_post_run_payload",
+        lambda **kwargs: {"ok": True, "reconciliation": {"run_id": kwargs["run_id"]}},
+    )
+
+    payload = paper_daily.run_command(
+        Namespace(
+            session_date="2026-03-22",
+            universe=["AAPL"],
+            run_name="daily-failed",
+            execute=True,
+            demo_mode=False,
+            model="hist_gbm",
+            top_k=10,
+            horizon=5,
+            data_root="data",
+            ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
+            min_close=10.0,
+            min_median_dollar_volume_20=50_000_000.0,
+            max_vol_20=0.04,
+            max_positions_per_sector=2,
+            disable_sector_neutral=False,
+            require_market_open=True,
+            min_buying_power_buffer=0.0,
+            max_order_notional=None,
+            max_total_notional=None,
+            max_total_orders=None,
+            execution_equity_cap=None,
+            post_submit_poll_seconds=15.0,
+            post_submit_poll_interval_seconds=2.0,
+            allow_unhealthy=False,
+            artifact_dir=None,
+            artifact_root="artifacts",
+            strategy_profile=None,
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["summary"]["decision"] == "failed"
+    assert payload["summary"]["report_status"] == "failed"
+    assert payload["run"]["report"]["run_id"] == "run-failed-123"
+
+
 def test_healthcheck_command_uses_helper(monkeypatch) -> None:
     monkeypatch.setattr(
         paper_daily,
@@ -335,3 +421,17 @@ def test_parse_args_supports_hist_gbm_random_forest_lightgbm_rank_strategy_profi
     assert args.strategy_profile == "us_hist_gbm_random_forest_lightgbm_rank_daily"
     assert args.model == "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank"
     assert args.run_name == "us-hist-gbm-random-forest-lightgbm-rank-daily"
+
+
+def test_parse_args_supports_extra_trees_strategy_profile() -> None:
+    args = paper_daily.parse_args(
+        [
+            "run",
+            "--strategy-profile",
+            "us_extra_trees_daily",
+        ]
+    )
+
+    assert args.strategy_profile == "us_extra_trees_daily"
+    assert args.model == "extra_trees"
+    assert args.run_name == "us-extra-trees-daily"

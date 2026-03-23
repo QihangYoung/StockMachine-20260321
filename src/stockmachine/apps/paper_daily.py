@@ -221,6 +221,8 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
             post_submit_poll_interval_seconds=args.post_submit_poll_interval_seconds,
         )
         report = runner.run(config)
+        report_payload = report.to_dict()
+        report_ok = report.status == "success"
         post_run_payload = _safe_build_post_run_payload(
             ledger_path=args.ledger_path,
             run_id=report.run_id,
@@ -229,17 +231,17 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         )
         payload = PaperDailyOperationPayload(
             command="run",
-            ok=True,
+            ok=report_ok,
             summary=summarize_paper_daily_result(
                 session_date=session_date,
                 run_name=args.run_name,
                 preflight=preflight,
                 report=report,
                 override_allowed=args.allow_unhealthy,
-                stage="completed",
+                stage=str(report_payload.get("stage", "completed")),
             ),
             preflight=preflight.to_dict(),
-            run={"report": report.to_dict()},
+            run={"report": report_payload},
             post_run=post_run_payload,
         )
         if resolved_artifact_dir is not None:
@@ -323,16 +325,18 @@ def summarize_paper_daily_result(
     override_allowed: bool,
     stage: str,
 ) -> dict[str, Any]:
-    decision = "blocked_preflight"
-    if report is not None:
-        decision = "executed_with_override" if (override_allowed and not preflight.policy_allowed) else "executed"
-    elif stage == "failed":
-        decision = "failed"
     report_status = None
     if isinstance(report, Mapping):
         report_status = report.get("status")
     elif report is not None:
         report_status = getattr(report, "status", None)
+    decision = "blocked_preflight"
+    if report_status and report_status != "success":
+        decision = "failed"
+    elif report is not None:
+        decision = "executed_with_override" if (override_allowed and not preflight.policy_allowed) else "executed"
+    elif stage == "failed":
+        decision = "failed"
     return {
         "session_date": session_date.isoformat(),
         "run_name": run_name,
