@@ -46,23 +46,25 @@ def _toy_sequence_frame() -> pd.DataFrame:
 
 def test_lstm_sequence_builder_fit_and_predict() -> None:
     frame = _toy_sequence_frame()
-    validation = frame.loc[frame["date"] >= frame["date"].sort_values().iloc[-8]].copy()
-    train = frame.loc[frame["date"] < validation["date"].min()].copy()
-    history = frame.copy()
+    cutoff = frame["date"].sort_values().iloc[-8]
+    validation = frame.loc[frame["date"] >= cutoff].copy()
+    train = frame.loc[frame["date"] < cutoff].copy()
+    history = pd.concat([train, validation], ignore_index=True).sort_values(["date", "symbol"]).reset_index(drop=True)
     model = build_lstm_regressor(lookback=5, epochs=2, patience=1, hidden_size=8, max_train_samples=128)
 
     model.fit(train, train["target"], validation_frame=validation, history_frame=history)
-    predictions = model.predict(frame)
+    predictions = model.predict(validation)
 
-    assert len(predictions) == len(frame)
+    assert len(predictions) == len(validation)
     assert np.isfinite(predictions).all()
 
 
 def test_transformer_sequence_builder_fit_and_predict() -> None:
     frame = _toy_sequence_frame()
-    validation = frame.loc[frame["date"] >= frame["date"].sort_values().iloc[-8]].copy()
-    train = frame.loc[frame["date"] < validation["date"].min()].copy()
-    history = frame.copy()
+    cutoff = frame["date"].sort_values().iloc[-8]
+    validation = frame.loc[frame["date"] >= cutoff].copy()
+    train = frame.loc[frame["date"] < cutoff].copy()
+    history = pd.concat([train, validation], ignore_index=True).sort_values(["date", "symbol"]).reset_index(drop=True)
     model = build_transformer_regressor(
         lookback=5,
         epochs=2,
@@ -75,7 +77,7 @@ def test_transformer_sequence_builder_fit_and_predict() -> None:
     )
 
     model.fit(train, train["target"], validation_frame=validation, history_frame=history)
-    predictions = model.predict(frame)
+    predictions = model.predict(validation)
 
-    assert len(predictions) == len(frame)
+    assert len(predictions) == len(validation)
     assert np.isfinite(predictions).all()

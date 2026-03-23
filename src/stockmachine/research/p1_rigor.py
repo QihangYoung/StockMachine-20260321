@@ -54,6 +54,59 @@ class StrictResearchBundle:
     predictions: pd.DataFrame
 
 
+def _resolve_research_session_dates(price_data: pd.DataFrame) -> pd.Index:
+    return pd.Index(
+        pd.to_datetime(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"], errors="coerce")
+        .dropna()
+        .dt.normalize()
+        .drop_duplicates()
+        .sort_values()
+    )
+
+
+def _require_explicit_universe_membership_coverage(
+    session_dates: pd.Index,
+    *,
+    universe_membership_frame: pd.DataFrame,
+    universe_name: str,
+) -> None:
+    if session_dates.empty:
+        raise ValueError("Strict research bundle requires at least one research session date.")
+    if universe_membership_frame.empty:
+        raise ValueError("Strict research bundle requires explicit universe_membership history; none was found.")
+
+    membership = universe_membership_frame.copy()
+    membership["session_date"] = pd.to_datetime(membership["session_date"], errors="coerce").dt.normalize()
+    membership = membership.dropna(subset=["session_date", "symbol"]).copy()
+    membership = membership.loc[membership["universe_name"].astype(str) == universe_name].copy()
+    if membership.empty:
+        raise ValueError(
+            f"Strict research bundle requires explicit universe_membership history for universe '{universe_name}'."
+        )
+
+    membership["is_member"] = membership.get("is_member", True)
+    membership["is_member"] = membership["is_member"].fillna(True).astype(bool)
+    if "entry_date" in membership.columns:
+        membership["entry_date"] = pd.to_datetime(membership["entry_date"], errors="coerce").dt.normalize()
+    if "exit_date" in membership.columns:
+        membership["exit_date"] = pd.to_datetime(membership["exit_date"], errors="coerce").dt.normalize()
+
+    active_mask = membership["is_member"]
+    if "entry_date" in membership.columns:
+        active_mask &= membership["entry_date"].isna() | (membership["entry_date"] <= membership["session_date"])
+    if "exit_date" in membership.columns:
+        active_mask &= membership["exit_date"].isna() | (membership["exit_date"] >= membership["session_date"])
+    membership = membership.loc[active_mask].copy()
+    available_dates = pd.Index(membership["session_date"].drop_duplicates().sort_values())
+    missing_dates = pd.Index(session_dates).difference(available_dates)
+    if not missing_dates.empty:
+        preview = ", ".join(str(date.date()) for date in missing_dates[:5])
+        raise ValueError(
+            "Strict research bundle requires explicit universe_membership coverage for every research session; "
+            f"missing {len(missing_dates)} session(s), first missing: {preview}"
+        )
+
+
 def build_strict_research_bundle(
     *,
     predict_start: str,
@@ -65,11 +118,18 @@ def build_strict_research_bundle(
     storage = layout or StorageLayout()
     dataset = load_us_equities_dataset(layout=storage)
     price_data = build_price_panel_from_silver(dataset)
+    session_dates = _resolve_research_session_dates(price_data)
+    _require_explicit_universe_membership_coverage(
+        session_dates,
+        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+    )
     metadata = build_point_in_time_metadata_history(
-        pd.Index(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"].drop_duplicates().sort_values()),
+        session_dates,
         universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
         symbol_master_frame=dataset["symbol_master"],
         industry_membership_frame=dataset["industry_membership"],
+        require_snapshot=True,
         universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
     )
     research_frame = build_research_frame(
