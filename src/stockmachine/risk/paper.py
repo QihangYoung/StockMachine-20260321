@@ -175,7 +175,7 @@ class BrokerAwareOrderRiskPolicy:
         }
 
         buying_power = float(getattr(broker_account, "buying_power", 0.0)) if broker_account is not None else float("inf")
-        available_buying_power = max(0.0, buying_power - self.min_buying_power_buffer)
+        buying_power_budget = max(0.0, buying_power - self.min_buying_power_buffer)
         running_notional = 0.0
         running_orders = 0
 
@@ -232,7 +232,8 @@ class BrokerAwareOrderRiskPolicy:
                 continue
 
             estimated_notional = float(order.quantity) * reference_price
-            if self.max_order_notional is not None and estimated_notional > self.max_order_notional:
+            is_sell = side == "SELL"
+            if not is_sell and self.max_order_notional is not None and estimated_notional > self.max_order_notional:
                 issues.append(
                     OrderValidationIssue(
                         code="max_order_notional_exceeded",
@@ -247,7 +248,7 @@ class BrokerAwareOrderRiskPolicy:
                 blocked.append(order)
                 continue
 
-            if self.max_total_orders is not None and running_orders + 1 > self.max_total_orders:
+            if not is_sell and self.max_total_orders is not None and running_orders + 1 > self.max_total_orders:
                 issues.append(
                     OrderValidationIssue(
                         code="max_total_orders_exceeded",
@@ -262,7 +263,7 @@ class BrokerAwareOrderRiskPolicy:
                 blocked.append(order)
                 continue
 
-            if self.max_total_notional is not None and running_notional + estimated_notional > self.max_total_notional:
+            if not is_sell and self.max_total_notional is not None and running_notional + estimated_notional > self.max_total_notional:
                 issues.append(
                     OrderValidationIssue(
                         code="max_total_notional_exceeded",
@@ -278,7 +279,7 @@ class BrokerAwareOrderRiskPolicy:
                 blocked.append(order)
                 continue
 
-            if running_notional + estimated_notional > available_buying_power:
+            if not is_sell and estimated_notional > buying_power_budget:
                 issues.append(
                     OrderValidationIssue(
                         code="insufficient_buying_power",
@@ -286,7 +287,7 @@ class BrokerAwareOrderRiskPolicy:
                         symbol=symbol,
                         details={
                             "estimated_notional": estimated_notional,
-                            "available_buying_power": available_buying_power - running_notional,
+                            "available_buying_power": buying_power_budget,
                         },
                     )
                 )
@@ -294,8 +295,12 @@ class BrokerAwareOrderRiskPolicy:
                 continue
 
             approved.append(order)
-            running_notional += estimated_notional
-            running_orders += 1
+            if is_sell:
+                buying_power_budget += estimated_notional
+            else:
+                buying_power_budget = max(0.0, buying_power_budget - estimated_notional)
+                running_notional += estimated_notional
+                running_orders += 1
 
         return OrderValidationResult(
             approved_orders=tuple(approved),

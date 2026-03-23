@@ -14,7 +14,7 @@ from stockmachine.apps.run_us_equities_paper import (
     build_demo_runner,
     parse_session_date,
 )
-from stockmachine.backtest.protocols import AccountSnapshot, MarketBar
+from stockmachine.backtest.protocols import AccountSnapshot, MarketBar, PositionSnapshot
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
 from stockmachine.execution import SameSessionMarketOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaBrokerError
@@ -146,10 +146,12 @@ def test_execute_mode_without_submitter_surfaces_failure() -> None:
 
 @dataclass(slots=True)
 class _OneSignalModel:
+    symbol: str = "AAPL"
+
     def predict(self, session_date: date, universe: list[str]) -> list[Signal]:
         return [
             Signal(
-                symbol="AAPL",
+                symbol=self.symbol,
                 side="LONG",
                 score=1.0,
                 confidence=0.9,
@@ -162,10 +164,12 @@ class _OneSignalModel:
 
 @dataclass(slots=True)
 class _OneTargetPolicy:
+    symbol: str = "AAPL"
+
     def build_targets(self, session_date: date, signals: list[Signal], account: AccountSnapshot) -> list[TargetPosition]:
         return [
             TargetPosition(
-                symbol="AAPL",
+                symbol=self.symbol,
                 target_weight=0.5,
                 max_weight=0.5,
                 reason="test",
@@ -177,6 +181,8 @@ class _OneTargetPolicy:
 
 @dataclass(slots=True)
 class _OneExecutionPolicy:
+    symbol: str = "AAPL"
+
     def generate_orders(
         self,
         session_date: date,
@@ -186,7 +192,7 @@ class _OneExecutionPolicy:
     ) -> list[OrderIntent]:
         return [
             OrderIntent(
-                symbol="AAPL",
+                symbol=self.symbol,
                 side="BUY",
                 quantity=5,
                 order_type="market",
@@ -199,8 +205,10 @@ class _OneExecutionPolicy:
 
 @dataclass(slots=True)
 class _OneUniverseProvider:
+    symbols: tuple[str, ...] = ("AAPL",)
+
     def get_universe(self, session_date: date) -> list[str]:
-        return ["AAPL"]
+        return list(self.symbols)
 
 
 @dataclass(slots=True)
@@ -213,15 +221,16 @@ class _OneAccountProvider:
 class _OneMarketDataProvider:
     def get_bars(self, session_date: date, universe: list[str]) -> dict[str, MarketBar]:
         return {
-            "AAPL": MarketBar(
+            symbol: MarketBar(
                 session_date=session_date,
-                symbol="AAPL",
+                symbol=symbol,
                 open=100.0,
                 high=101.0,
                 low=99.0,
                 close=100.5,
                 volume=1_000_000.0,
             )
+            for symbol in universe
         }
 
 
@@ -325,6 +334,82 @@ class _FakeAccountSyncProvider:
         )
 
 
+@dataclass(slots=True)
+class _PositionedAccountSyncProvider:
+    entry_date: date
+    quantity: int = 5
+
+    def sync(self, session_date: date | None = None):
+        effective_date = session_date or date(2026, 3, 23)
+        market_value = 100.0 * self.quantity
+        snapshot = AccountSnapshot(
+            session_date=effective_date,
+            cash=500.0,
+            equity=1_000.0,
+            gross_exposure=market_value,
+            positions=(
+                PositionSnapshot(
+                    symbol="AAPL",
+                    quantity=self.quantity,
+                    market_value=market_value,
+                    weight=market_value / 1_000.0,
+                ),
+            ),
+        )
+        return SimpleNamespace(
+            snapshot=snapshot,
+            broker_account=SimpleNamespace(
+                status="ACTIVE",
+                buying_power=1_000.0,
+                cash=500.0,
+                equity=1_000.0,
+                trading_blocked=False,
+                account_blocked=False,
+                observed_at=datetime(2026, 3, 23, 1, 0, tzinfo=timezone.utc),
+            ),
+            broker_positions=(
+                SimpleNamespace(
+                    symbol="AAPL",
+                    quantity=self.quantity,
+                    market_value=market_value,
+                    avg_entry_price=100.0,
+                    current_price=100.0,
+                ),
+            ),
+            clock=SimpleNamespace(
+                is_open=True,
+                timestamp=datetime(2026, 3, 23, 14, 0, tzinfo=timezone.utc),
+            ),
+        )
+
+
+@dataclass(slots=True)
+class _HistoryOrderProvider:
+    entry_date: date
+    quantity: int = 5
+    updated_at_text: str | None = None
+
+    def list_orders(self, *, status: str | None = None, symbols: list[str] | None = None, **kwargs):
+        if status == "open":
+            return []
+        updated_at = self.updated_at_text or f"{self.entry_date.isoformat()}T14:01:00+00:00"
+        return [
+            {
+                "id": "hist-buy-001",
+                "client_order_id": "cid-hist-buy-001",
+                "symbol": "AAPL",
+                "side": "buy",
+                "status": "filled",
+                "qty": self.quantity,
+                "filled_qty": self.quantity,
+                "type": "market",
+                "submitted_at": f"{self.entry_date.isoformat()}T14:00:00+00:00",
+                "updated_at": updated_at,
+                "avg_fill_price": 100.0,
+            }
+        ]
+
+
 def test_runner_execute_path_records_orders_and_fills(tmp_path) -> None:
     ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
     ledger.initialize()
@@ -376,6 +461,197 @@ def test_runner_execute_path_records_orders_and_fills(tmp_path) -> None:
     assert fill_audits[0].run_id == payload["run_id"]
     assert fill_audits[0].expected_price == 100.0
     assert fill_audits[0].slippage == 0.25
+
+
+def test_runner_skips_new_buys_when_existing_positions_are_not_mature(tmp_path, monkeypatch) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            account_sync_provider=_PositionedAccountSyncProvider(entry_date=date(2026, 3, 20)),
+            market_data_provider=_OneMarketDataProvider(),
+            open_order_provider=_HistoryOrderProvider(entry_date=date(2026, 3, 20)),
+            ledger=ledger,
+        )
+    )
+    monkeypatch.setattr(
+        PaperRunner,
+        "_available_silver_session_dates",
+        lambda self: (
+            date(2026, 3, 17),
+            date(2026, 3, 18),
+            date(2026, 3, 19),
+            date(2026, 3, 20),
+            date(2026, 3, 23),
+        ),
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 23),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="immature-position-test",
+        )
+    )
+
+    payload = report.to_dict()
+    assert payload["counts"]["targets"] == 1
+    assert payload["counts"]["buy_orders"] == 0
+    assert payload["counts"]["exit_orders"] == 0
+    assert payload["counts"]["orders"] == 0
+    assert payload["meta"]["position_exit_plan"]["rebalance_due"] is False
+    assert payload["meta"]["position_exit_plan"]["immature_symbols"] == ["AAPL"]
+
+
+def test_runner_keeps_mature_positions_when_symbol_remains_in_targets(tmp_path, monkeypatch) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            account_sync_provider=_PositionedAccountSyncProvider(entry_date=date(2026, 3, 16)),
+            market_data_provider=_OneMarketDataProvider(),
+            open_order_provider=_HistoryOrderProvider(entry_date=date(2026, 3, 16)),
+            ledger=ledger,
+        )
+    )
+    monkeypatch.setattr(
+        PaperRunner,
+        "_available_silver_session_dates",
+        lambda self: (
+            date(2026, 3, 16),
+            date(2026, 3, 17),
+            date(2026, 3, 18),
+            date(2026, 3, 19),
+            date(2026, 3, 20),
+            date(2026, 3, 23),
+        ),
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 23),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="mature-position-test",
+        )
+    )
+
+    payload = report.to_dict()
+    decisions = ledger.list_order_decisions(run_id=payload["run_id"])
+
+    assert payload["counts"]["exit_orders"] == 0
+    assert payload["counts"]["buy_orders"] == 0
+    assert payload["counts"]["orders"] == 0
+    assert payload["meta"]["position_exit_plan"]["rebalance_due"] is True
+    assert payload["meta"]["position_exit_plan"]["mature_symbols"] == ["AAPL"]
+    assert payload["meta"]["position_exit_plan"]["carry_forward_symbols"] == ["AAPL"]
+    assert decisions == []
+
+
+def test_runner_rebalances_when_existing_positions_change_symbols(tmp_path, monkeypatch) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(symbol="MSFT"),
+            portfolio_policy=_OneTargetPolicy(symbol="MSFT"),
+            execution_policy=_OneExecutionPolicy(symbol="MSFT"),
+            universe_provider=_OneUniverseProvider(symbols=("MSFT",)),
+            account_provider=_OneAccountProvider(),
+            account_sync_provider=_PositionedAccountSyncProvider(entry_date=date(2026, 3, 16)),
+            market_data_provider=_OneMarketDataProvider(),
+            open_order_provider=_HistoryOrderProvider(entry_date=date(2026, 3, 16)),
+            ledger=ledger,
+        )
+    )
+    monkeypatch.setattr(
+        PaperRunner,
+        "_available_silver_session_dates",
+        lambda self: (
+            date(2026, 3, 16),
+            date(2026, 3, 17),
+            date(2026, 3, 18),
+            date(2026, 3, 19),
+            date(2026, 3, 20),
+            date(2026, 3, 23),
+        ),
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 23),
+            dry_run=True,
+            universe=("MSFT",),
+            run_name="mature-position-symbol-change-test",
+        )
+    )
+
+    payload = report.to_dict()
+    decisions = ledger.list_order_decisions(run_id=payload["run_id"])
+
+    assert payload["counts"]["exit_orders"] == 1
+    assert payload["counts"]["buy_orders"] == 1
+    assert payload["counts"]["orders"] == 2
+    assert payload["meta"]["position_exit_plan"]["carry_forward_symbols"] == []
+    assert [decision.side for decision in decisions] == ["SELL", "BUY"]
+
+
+def test_runner_accepts_broker_history_timestamps_with_short_fractional_seconds(tmp_path, monkeypatch) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            account_sync_provider=_PositionedAccountSyncProvider(entry_date=date(2026, 3, 20)),
+            market_data_provider=_OneMarketDataProvider(),
+            open_order_provider=_HistoryOrderProvider(
+                entry_date=date(2026, 3, 20),
+                updated_at_text="2026-03-23T14:04:46.52648+00:00",
+            ),
+            ledger=ledger,
+        )
+    )
+    monkeypatch.setattr(
+        PaperRunner,
+        "_available_silver_session_dates",
+        lambda self: (
+            date(2026, 3, 17),
+            date(2026, 3, 18),
+            date(2026, 3, 19),
+            date(2026, 3, 20),
+            date(2026, 3, 23),
+        ),
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 23),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="timestamp-normalization-test",
+        )
+    )
+
+    payload = report.to_dict()
+
+    assert payload["status"] == "success"
+    assert payload["counts"]["orders"] == 0
+    assert payload["meta"]["position_exit_plan"]["immature_symbols"] == ["AAPL"]
 
 
 def test_runner_records_submission_retry_metadata_on_buy_rejection(tmp_path) -> None:

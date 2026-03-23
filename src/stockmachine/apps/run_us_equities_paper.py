@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import time as wall_time
+from collections import defaultdict, deque
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -775,11 +776,28 @@ class PaperRunner:
                         )
                     )
 
-            bars = dict(self.dependencies.market_data_provider.get_bars(runtime_session_date, universe))
+            position_symbols = tuple(
+                sorted(
+                    {
+                        str(getattr(position, "symbol", "")).upper()
+                        for position in getattr(account, "positions", ())
+                        if str(getattr(position, "symbol", "")).strip()
+                    }
+                )
+            )
+            bar_symbols = tuple(sorted(set(universe) | set(position_symbols)))
+            bars = dict(self.dependencies.market_data_provider.get_bars(runtime_session_date, bar_symbols))
+            exit_plan = self._build_position_exit_plan(
+                session_date=runtime_session_date,
+                account_sync_result=account_sync_result,
+                bars=bars,
+                available_session_dates=self._available_silver_session_dates() or (),
+            )
+            meta["position_exit_plan"] = exit_plan["meta"]
             execution_account = self._execution_account_snapshot(account, config.execution_equity_cap)
             if config.execution_equity_cap is not None:
                 meta["execution_equity_cap"] = float(config.execution_equity_cap)
-            orders = list(
+            buy_orders = list(
                 self.dependencies.execution_policy.generate_orders(
                     runtime_session_date,
                     targets,
@@ -787,8 +805,21 @@ class PaperRunner:
                     execution_account,
                 )
             )
+            exit_orders = list(exit_plan["orders"])
+            if not bool(exit_plan["allow_new_buys"]):
+                buy_orders = []
+            exit_orders, buy_orders, carry_forward_symbols = self._net_rebalance_orders(
+                exit_orders=exit_orders,
+                buy_orders=buy_orders,
+            )
+            exit_plan_meta = dict(meta["position_exit_plan"])
+            exit_plan_meta["carry_forward_symbols"] = carry_forward_symbols
+            meta["position_exit_plan"] = exit_plan_meta
+            orders = [*exit_orders, *buy_orders]
             orders = list(self._with_client_order_ids(orders, session_date=runtime_session_date, run_id=run_id))
             counts["orders"] = len(orders)
+            counts["exit_orders"] = len(exit_orders)
+            counts["buy_orders"] = len(buy_orders)
 
             open_orders: Sequence[Mapping[str, Any] | object] = ()
             approved_orders = tuple(orders)
@@ -1249,6 +1280,290 @@ class PaperRunner:
                 created += 1
 
         return created
+
+    def _build_position_exit_plan(
+        self,
+        *,
+        session_date: date,
+        account_sync_result: AccountSyncResult | None,
+        bars: Mapping[str, MarketBar],
+        available_session_dates: Sequence[date],
+    ) -> dict[str, Any]:
+        broker_positions = tuple(getattr(account_sync_result, "broker_positions", ()) or ())
+        if not broker_positions:
+            return {
+                "orders": (),
+                "allow_new_buys": True,
+                "meta": {
+                    "current_positions": 0,
+                    "mature_symbols": [],
+                    "immature_symbols": [],
+                    "partial_symbols": [],
+                    "unresolved_symbols": [],
+                    "rebalance_due": True,
+                    "history_source": "none",
+                },
+            }
+
+        if not available_session_dates:
+            return {
+                "orders": (),
+                "allow_new_buys": False,
+                "meta": {
+                    "current_positions": len(broker_positions),
+                    "mature_symbols": [],
+                    "immature_symbols": [],
+                    "partial_symbols": [],
+                    "unresolved_symbols": [str(getattr(position, "symbol", "")).upper() for position in broker_positions],
+                    "rebalance_due": False,
+                    "history_source": "missing_session_calendar",
+                },
+            }
+
+        horizon_bars = int(getattr(self.dependencies.signal_model, "horizon_bars", 5) or 5)
+        symbols = tuple(
+            sorted(
+                {
+                    str(getattr(position, "symbol", "")).upper()
+                    for position in broker_positions
+                    if str(getattr(position, "symbol", "")).strip()
+                }
+            )
+        )
+        lots_by_symbol, history_source = self._load_open_position_lots(
+            symbols=symbols,
+            available_session_dates=available_session_dates,
+        )
+        session_index = {current: index for index, current in enumerate(available_session_dates)}
+        current_index = session_index.get(session_date)
+        if current_index is None:
+            current_index = max(index for current, index in session_index.items() if current <= session_date)
+
+        exit_orders: list[OrderIntent] = []
+        mature_symbols: list[str] = []
+        immature_symbols: list[str] = []
+        partial_symbols: list[str] = []
+        unresolved_symbols: list[str] = []
+        timestamp = datetime.combine(session_date, time(9, 30))
+
+        for broker_position in broker_positions:
+            symbol = str(getattr(broker_position, "symbol", "")).upper()
+            quantity = abs(int(float(getattr(broker_position, "quantity", 0.0) or 0.0)))
+            if not symbol or quantity <= 0:
+                continue
+
+            open_lots = list(lots_by_symbol.get(symbol, ()))
+            if not open_lots:
+                unresolved_symbols.append(symbol)
+                continue
+
+            mature_lots: list[tuple[int, date, int]] = []
+            immature_quantity = 0
+            mature_quantity = 0
+            tracked_quantity = 0
+            for lot_quantity, entry_session_date in open_lots:
+                tracked_quantity += int(lot_quantity)
+                entry_index = session_index.get(entry_session_date)
+                if entry_index is None:
+                    unresolved_symbols.append(symbol)
+                    mature_lots = []
+                    mature_quantity = 0
+                    immature_quantity = 0
+                    tracked_quantity = 0
+                    break
+                age_sessions = current_index - entry_index
+                if age_sessions >= horizon_bars:
+                    mature_lots.append((int(lot_quantity), entry_session_date, age_sessions))
+                    mature_quantity += int(lot_quantity)
+                else:
+                    immature_quantity += int(lot_quantity)
+
+            if tracked_quantity < quantity:
+                unresolved_symbols.append(symbol)
+                continue
+
+            sell_quantity = min(quantity, mature_quantity)
+            remaining_after_sell = max(quantity - sell_quantity, 0)
+            if sell_quantity > 0:
+                if remaining_after_sell > 0:
+                    partial_symbols.append(symbol)
+                else:
+                    mature_symbols.append(symbol)
+                reference_price = self._position_reference_price(symbol=symbol, bars=bars, broker_position=broker_position)
+                oldest_entry = min((entry for _, entry, _ in mature_lots), default=session_date)
+                max_age_sessions = max((age for _, _, age in mature_lots), default=horizon_bars)
+                exit_orders.append(
+                    OrderIntent(
+                        symbol=symbol,
+                        side="SELL",
+                        quantity=sell_quantity,
+                        order_type="market",
+                        limit_price=None,
+                        timestamp=timestamp,
+                        meta={
+                            "reference_price": reference_price,
+                            "close": reference_price,
+                            "holding_entry_session_date": oldest_entry.isoformat(),
+                            "holding_age_sessions": max_age_sessions,
+                            "auto_exit": True,
+                            "exit_reason": "horizon_exit",
+                        },
+                    )
+                )
+
+            if remaining_after_sell > 0 and symbol not in partial_symbols:
+                immature_symbols.append(symbol)
+            elif sell_quantity == 0:
+                immature_symbols.append(symbol)
+
+        allow_new_buys = not (immature_symbols or partial_symbols or unresolved_symbols)
+        return {
+            "orders": tuple(exit_orders),
+            "allow_new_buys": allow_new_buys,
+            "meta": {
+                "current_positions": len(broker_positions),
+                "mature_symbols": mature_symbols,
+                "immature_symbols": immature_symbols,
+                "partial_symbols": partial_symbols,
+                "unresolved_symbols": unresolved_symbols,
+                "rebalance_due": allow_new_buys,
+                "history_source": history_source,
+            },
+        }
+
+    def _load_open_position_lots(
+        self,
+        *,
+        symbols: Sequence[str],
+        available_session_dates: Sequence[date],
+    ) -> tuple[dict[str, tuple[tuple[int, date], ...]], str]:
+        order_payloads = self._list_position_history_orders(symbols=symbols)
+        if not order_payloads:
+            return {}, "broker_history_empty"
+
+        events_by_symbol: dict[str, list[BrokerOrderSnapshot]] = defaultdict(list)
+        for payload in order_payloads:
+            snapshot = payload if isinstance(payload, BrokerOrderSnapshot) else BrokerOrderSnapshot.from_payload(payload)
+            if not snapshot.symbol or snapshot.filled_quantity <= 0:
+                continue
+            side = str(snapshot.side).upper()
+            if side not in {"BUY", "SELL"}:
+                continue
+            events_by_symbol[snapshot.symbol.upper()].append(snapshot)
+
+        lots_by_symbol: dict[str, tuple[tuple[int, date], ...]] = {}
+        for symbol, events in events_by_symbol.items():
+            events.sort(key=lambda item: (item.updated_at_utc, item.order_id))
+            lots: deque[tuple[int, date]] = deque()
+            for event in events:
+                event_session_date = self._resolve_session_date(
+                    event.updated_at_utc.date(),
+                    available_session_dates=available_session_dates,
+                )
+                if event_session_date is None:
+                    continue
+                quantity = int(event.filled_quantity)
+                if quantity <= 0:
+                    continue
+                if str(event.side).upper() == "BUY":
+                    lots.append((quantity, event_session_date))
+                    continue
+
+                remaining = quantity
+                while remaining > 0 and lots:
+                    lot_quantity, lot_session_date = lots[0]
+                    if lot_quantity <= remaining:
+                        remaining -= lot_quantity
+                        lots.popleft()
+                    else:
+                        lots[0] = (lot_quantity - remaining, lot_session_date)
+                        remaining = 0
+            lots_by_symbol[symbol] = tuple(lots)
+        return lots_by_symbol, "broker_order_history"
+
+    def _list_position_history_orders(self, *, symbols: Sequence[str]) -> tuple[Mapping[str, Any] | object, ...]:
+        provider = self.dependencies.open_order_provider
+        if provider is None or not symbols:
+            return ()
+        list_orders = getattr(provider, "list_orders", None)
+        if not callable(list_orders):
+            return ()
+
+        attempts = (
+            {"status": "all", "symbols": list(symbols), "limit": 500, "direction": "desc"},
+            {"status": "all", "symbols": list(symbols), "limit": 500},
+            {"status": "all", "symbols": list(symbols)},
+        )
+        for kwargs in attempts:
+            try:
+                payload = list_orders(**kwargs)
+                return tuple(payload)
+            except TypeError:
+                continue
+        return ()
+
+    def _resolve_session_date(
+        self,
+        candidate: date,
+        *,
+        available_session_dates: Sequence[date],
+    ) -> date | None:
+        not_after = [current for current in available_session_dates if current <= candidate]
+        if not not_after:
+            return None
+        return not_after[-1]
+
+    def _position_reference_price(
+        self,
+        *,
+        symbol: str,
+        bars: Mapping[str, MarketBar],
+        broker_position: object,
+    ) -> float | None:
+        bar = bars.get(symbol)
+        if bar is not None:
+            return float(bar.adj_open) if bar.adj_open is not None else float(bar.open)
+        current_price = getattr(broker_position, "current_price", None)
+        if current_price is None:
+            current_price = getattr(broker_position, "avg_entry_price", None)
+        try:
+            price = float(current_price)
+        except (TypeError, ValueError):
+            return None
+        return price if price > 0 else None
+
+    def _net_rebalance_orders(
+        self,
+        *,
+        exit_orders: Sequence[OrderIntent],
+        buy_orders: Sequence[OrderIntent],
+    ) -> tuple[list[OrderIntent], list[OrderIntent], list[str]]:
+        sell_by_symbol = {
+            order.symbol.upper()
+            for order in exit_orders
+            if str(order.side).upper() == "SELL"
+        }
+        buy_by_symbol = {
+            order.symbol.upper()
+            for order in buy_orders
+            if str(order.side).upper() == "BUY"
+        }
+        carry_forward_symbols = sorted(sell_by_symbol & buy_by_symbol)
+        if not carry_forward_symbols:
+            return list(exit_orders), list(buy_orders), []
+
+        carry_forward = set(carry_forward_symbols)
+        filtered_exit_orders = [
+            order
+            for order in exit_orders
+            if not (str(order.side).upper() == "SELL" and order.symbol.upper() in carry_forward)
+        ]
+        filtered_buy_orders = [
+            order
+            for order in buy_orders
+            if not (str(order.side).upper() == "BUY" and order.symbol.upper() in carry_forward)
+        ]
+        return filtered_exit_orders, filtered_buy_orders, carry_forward_symbols
 
     def _decision_reason(self, issues: Sequence[OrderValidationIssue]) -> str:
         if not issues:

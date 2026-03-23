@@ -42,20 +42,24 @@ function Invoke-JsonPythonModule {
         throw "Command returned empty output: python $($command -join ' ')"
     }
 
-    $ok = $false
-    if ($text -match '"ok"\s*:\s*true') {
-        $ok = $true
+    $jsonStart = $text.IndexOf("{")
+    $jsonEnd = $text.LastIndexOf("}")
+    if ($jsonStart -lt 0 -or $jsonEnd -lt $jsonStart) {
+        throw "Command did not emit a JSON payload: python $($command -join ' ')"
     }
 
-    $runId = $null
-    if ($text -match '"run_id"\s*:\s*"([^"]+)"') {
-        $runId = $Matches[1]
+    $jsonText = $text.Substring($jsonStart, $jsonEnd - $jsonStart + 1)
+    try {
+        $payload = $jsonText | ConvertFrom-Json
+    }
+    catch {
+        throw "Command emitted invalid JSON payload: python $($command -join ' ')"
     }
 
     return [PSCustomObject]@{
         RawText = $text
-        Ok = $ok
-        RunId = $runId
+        Ok = [bool]$payload.ok
+        RunId = if ($payload.PSObject.Properties.Name -contains "run_id") { $payload.run_id } else { $null }
     }
 }
 

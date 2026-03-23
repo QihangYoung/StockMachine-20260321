@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
-import re
 
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 from stockmachine.state.ledger import LocalLedger
 from stockmachine.state.models import FillRecord, OrderRecord
 
@@ -38,7 +38,7 @@ def _coerce_datetime(value: Any, default: datetime | None = None) -> datetime:
         return default
     if isinstance(value, datetime):
         return _ensure_utc(value)
-    parsed = datetime.fromisoformat(_trim_fractional_seconds(str(value)))
+    parsed = parse_iso_datetime_like(value)
     return _ensure_utc(parsed)
 
 
@@ -52,14 +52,6 @@ def _coerce_int(value: Any, default: int = 0) -> int:
     if value is None:
         return default
     return int(value)
-
-
-def _trim_fractional_seconds(value: str) -> str:
-    match = re.match(r"^(.*?\.\d{6})\d+(.*)$", value)
-    if match:
-        return f"{match.group(1)}{match.group(2)}"
-    return value
-
 
 @dataclass(slots=True, frozen=True)
 class BrokerOrderSnapshot:

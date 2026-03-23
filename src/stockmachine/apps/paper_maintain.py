@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 from stockmachine.live.order_maintenance import (
     OrderMaintenancePolicy,
     build_order_maintenance_summary,
@@ -86,7 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _parse_as_of_utc(value: str | None) -> datetime | None:
     if value is None:
         return None
-    parsed = datetime.fromisoformat(value)
+    parsed = parse_iso_datetime_like(value)
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)

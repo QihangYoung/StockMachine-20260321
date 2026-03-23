@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -12,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from stockmachine.data.vendors.alpaca import AlpacaCredentials
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 
 
 class AlpacaBrokerError(RuntimeError):
@@ -376,13 +376,4 @@ def _to_datetime(value: Any) -> datetime | None:
         return None
     if isinstance(value, datetime):
         return value
-    text = str(value).replace("Z", "+00:00")
-    text = _trim_fractional_seconds(text)
-    return datetime.fromisoformat(text)
-
-
-def _trim_fractional_seconds(value: str) -> str:
-    match = re.match(r"^(.*?\.\d{6})\d+(.*)$", value)
-    if match:
-        return f"{match.group(1)}{match.group(2)}"
-    return value
+    return parse_iso_datetime_like(value)

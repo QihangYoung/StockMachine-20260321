@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 from stockmachine.state.models import (
     EquitySnapshotRecord,
     FillRecord,
@@ -48,7 +49,7 @@ def _json_load(value: str | None) -> dict[str, Any]:
 def _row_to_datetime(value: str | None) -> datetime:
     if value is None:
         raise ValueError("datetime column cannot be null")
-    parsed = datetime.fromisoformat(value)
+    parsed = parse_iso_datetime_like(value)
     return _ensure_utc(parsed)
 
 

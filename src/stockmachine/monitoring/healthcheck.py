@@ -7,6 +7,7 @@ import json
 import sqlite3
 from typing import Any, Mapping
 
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 from stockmachine.state import LocalLedger
 
 _TERMINAL_RUN_STATUSES = {"finished", "success", "completed", "blocked"}
@@ -21,7 +22,7 @@ def _ensure_utc(value: datetime) -> datetime:
 def _row_to_datetime(value: str | None) -> datetime | None:
     if value is None:
         return None
-    return _ensure_utc(datetime.fromisoformat(value))
+    return _ensure_utc(parse_iso_datetime_like(value))
 
 
 def _row_to_date(value: str | None) -> date | None:

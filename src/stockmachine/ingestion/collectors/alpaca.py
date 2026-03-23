@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from stockmachine.data.vendors import AlpacaHttpClient
+from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 
 from .base import FetchWindow, RawRecord
 
@@ -126,8 +127,7 @@ class AlpacaCorporateActionsCollector:
 def _parse_timestamp(raw_value: object) -> datetime | None:
     if not isinstance(raw_value, str) or not raw_value:
         return None
-    normalized = raw_value.replace("Z", "+00:00")
-    return datetime.fromisoformat(normalized)
+    return parse_iso_datetime_like(raw_value)
 
 
 def _parse_event_date(raw_value: object) -> datetime | None:

@@ -83,6 +83,46 @@ def test_risk_policy_enforces_buying_power_in_order_sequence() -> None:
     assert result.issues[0].code == "insufficient_buying_power"
 
 
+def test_risk_policy_allows_sell_orders_to_release_buying_power() -> None:
+    policy = BrokerAwareOrderRiskPolicy()
+    account_sync = SimpleNamespace(
+        broker_account=SimpleNamespace(
+            status="ACTIVE",
+            buying_power=400.0,
+            trading_blocked=False,
+            account_blocked=False,
+        ),
+        clock=SimpleNamespace(is_open=True),
+    )
+    orders = [
+        OrderIntent(
+            symbol="AAPL",
+            side="SELL",
+            quantity=5,
+            order_type="market",
+            limit_price=None,
+            timestamp=datetime(2026, 3, 23, tzinfo=timezone.utc),
+            meta={"close": 100.0},
+        ),
+        OrderIntent(
+            symbol="MSFT",
+            side="BUY",
+            quantity=8,
+            order_type="market",
+            limit_price=None,
+            timestamp=datetime(2026, 3, 23, tzinfo=timezone.utc),
+            meta={"close": 100.0},
+        ),
+    ]
+
+    result = policy.validate(orders=orders, account_sync=account_sync)
+
+    assert len(result.approved_orders) == 2
+    assert [order.side for order in result.approved_orders] == ["SELL", "BUY"]
+    assert len(result.blocked_orders) == 0
+    assert result.estimated_notional == 800.0
+
+
 def test_risk_policy_blocks_orders_above_max_order_notional() -> None:
     policy = BrokerAwareOrderRiskPolicy(max_order_notional=500.0)
     account_sync = SimpleNamespace(

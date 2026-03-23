@@ -198,6 +198,37 @@ def test_alpaca_trading_adapter_accepts_nanosecond_timestamps(monkeypatch) -> No
     assert clock.next_open.isoformat() == "2026-03-22T09:30:00.123456-04:00"
 
 
+def test_alpaca_trading_adapter_accepts_short_fractional_timestamps(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        if request.full_url.endswith("/v2/clock"):
+            return _FakeResponse(
+                {
+                    "timestamp": "2026-03-21T12:22:38.63464-04:00",
+                    "is_open": False,
+                    "next_open": "2026-03-22T09:30:00.1-04:00",
+                    "next_close": "2026-03-21T16:00:00.00001-04:00",
+                }
+            )
+        raise AssertionError(f"Unexpected request: {request.full_url} {request.get_method()}")
+
+    monkeypatch.setattr("stockmachine.execution.brokers.alpaca.urlopen", fake_urlopen)
+
+    adapter = AlpacaTradingAdapter(
+        credentials=AlpacaCredentials(
+            api_key_id="k",
+            api_secret_key="s",
+            trading_base_url="https://paper-api.alpaca.markets",
+            data_base_url="https://data.alpaca.markets",
+        )
+    )
+
+    clock = adapter.get_clock()
+
+    assert clock.timestamp.isoformat() == "2026-03-21T12:22:38.634640-04:00"
+    assert clock.next_open.isoformat() == "2026-03-22T09:30:00.100000-04:00"
+    assert clock.next_close.isoformat() == "2026-03-21T16:00:00.000010-04:00"
+
+
 def test_alpaca_trading_adapter_detects_paper_environment() -> None:
     paper_adapter = AlpacaTradingAdapter(
         credentials=AlpacaCredentials(
