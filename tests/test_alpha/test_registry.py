@@ -24,22 +24,11 @@ def test_alpha_registry_lists_supported_baselines() -> None:
         "xgboost_regressor",
         "lstm_regressor",
         "transformer_regressor",
-        "ensemble_hist_gbm_ridge_mean",
-        "ensemble_hist_gbm_ridge_rank",
-        "ensemble_hist_gbm_random_forest_mean",
-        "ensemble_hist_gbm_random_forest_rank",
-        "ensemble_hist_gbm_lightgbm_regressor_mean",
-        "ensemble_hist_gbm_lightgbm_regressor_rank",
-        "ensemble_random_forest_lightgbm_regressor_mean",
-        "ensemble_random_forest_lightgbm_regressor_rank",
-        "ensemble_hist_gbm_ridge_random_forest_mean",
-        "ensemble_hist_gbm_ridge_random_forest_rank",
-        "ensemble_hist_gbm_random_forest_lightgbm_regressor_mean",
-        "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank",
-        "ensemble_extra_trees_hist_gbm_rank",
-        "ensemble_extra_trees_lightgbm_ranker_rank",
-        "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
     )
+    assert "ensemble_hist_gbm_ridge_mean" not in list_alpha_expert_names()
+    assert "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank" not in list_alpha_expert_names()
+    assert "ensemble_hist_gbm_ridge_mean" in list_alpha_expert_names(include_archived=True)
+    assert "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank" in list_alpha_expert_names(include_archived=True)
     assert get_alpha_expert("hist_gbm").family == "tree"
     assert get_alpha_expert("ridge").task == "cross_sectional_regression"
     assert get_alpha_expert("huber_regression").family == "linear"
@@ -48,6 +37,7 @@ def test_alpha_registry_lists_supported_baselines() -> None:
     assert get_alpha_expert("catboost_regressor").family == "tree"
     assert get_alpha_expert("lstm_regressor").family == "sequence"
     assert get_alpha_expert("transformer_regressor").family == "sequence"
+    assert get_alpha_expert("ensemble_hist_gbm_ridge_mean").archived is True
     assert get_alpha_expert("ensemble_hist_gbm_ridge_mean").components == ("hist_gbm", "ridge")
     assert get_alpha_expert("ensemble_hist_gbm_ridge_rank").combine_method == "rank_average"
     assert get_alpha_expert("ensemble_hist_gbm_random_forest_mean").components == (

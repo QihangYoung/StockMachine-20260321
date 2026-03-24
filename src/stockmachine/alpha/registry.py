@@ -14,6 +14,7 @@ class AlphaExpertSpec:
     default_horizon: int = 5
     components: tuple[str, ...] = field(default_factory=tuple)
     combine_method: str | None = None
+    archived: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -24,6 +25,7 @@ class AlphaExpertSpec:
             "default_horizon": self.default_horizon,
             "components": list(self.components),
             "combine_method": self.combine_method,
+            "archived": self.archived,
         }
 
 
@@ -113,6 +115,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of normalized hist_gbm and ridge expert scores.",
         components=("hist_gbm", "ridge"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_hist_gbm_ridge_rank": AlphaExpertSpec(
         name="ensemble_hist_gbm_ridge_rank",
@@ -121,6 +124,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of hist_gbm and ridge expert predictions.",
         components=("hist_gbm", "ridge"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_hist_gbm_random_forest_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_random_forest_mean",
@@ -129,6 +133,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of hist_gbm and random_forest expert scores.",
         components=("hist_gbm", "random_forest"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_hist_gbm_random_forest_rank": AlphaExpertSpec(
         name="ensemble_hist_gbm_random_forest_rank",
@@ -137,6 +142,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of hist_gbm and random_forest expert predictions.",
         components=("hist_gbm", "random_forest"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_hist_gbm_lightgbm_regressor_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_lightgbm_regressor_mean",
@@ -145,6 +151,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of hist_gbm and lightgbm_regressor expert scores.",
         components=("hist_gbm", "lightgbm_regressor"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_hist_gbm_lightgbm_regressor_rank": AlphaExpertSpec(
         name="ensemble_hist_gbm_lightgbm_regressor_rank",
@@ -153,6 +160,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of hist_gbm and lightgbm_regressor expert predictions.",
         components=("hist_gbm", "lightgbm_regressor"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_random_forest_lightgbm_regressor_mean": AlphaExpertSpec(
         name="ensemble_random_forest_lightgbm_regressor_mean",
@@ -161,6 +169,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of random_forest and lightgbm_regressor expert scores.",
         components=("random_forest", "lightgbm_regressor"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_random_forest_lightgbm_regressor_rank": AlphaExpertSpec(
         name="ensemble_random_forest_lightgbm_regressor_rank",
@@ -169,6 +178,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of random_forest and lightgbm_regressor expert predictions.",
         components=("random_forest", "lightgbm_regressor"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_hist_gbm_ridge_random_forest_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_ridge_random_forest_mean",
@@ -177,6 +187,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of hist_gbm, ridge, and random_forest expert scores.",
         components=("hist_gbm", "ridge", "random_forest"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_hist_gbm_ridge_random_forest_rank": AlphaExpertSpec(
         name="ensemble_hist_gbm_ridge_random_forest_rank",
@@ -185,6 +196,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of hist_gbm, ridge, and random_forest expert predictions.",
         components=("hist_gbm", "ridge", "random_forest"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_hist_gbm_random_forest_lightgbm_regressor_mean": AlphaExpertSpec(
         name="ensemble_hist_gbm_random_forest_lightgbm_regressor_mean",
@@ -193,6 +205,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Mean blend of hist_gbm, random_forest, and lightgbm_regressor expert scores.",
         components=("hist_gbm", "random_forest", "lightgbm_regressor"),
         combine_method="mean_score",
+        archived=True,
     ),
     "ensemble_hist_gbm_random_forest_lightgbm_regressor_rank": AlphaExpertSpec(
         name="ensemble_hist_gbm_random_forest_lightgbm_regressor_rank",
@@ -201,6 +214,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of hist_gbm, random_forest, and lightgbm_regressor expert predictions.",
         components=("hist_gbm", "random_forest", "lightgbm_regressor"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_extra_trees_hist_gbm_rank": AlphaExpertSpec(
         name="ensemble_extra_trees_hist_gbm_rank",
@@ -209,6 +223,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of extra_trees and hist_gbm expert predictions.",
         components=("extra_trees", "hist_gbm"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_extra_trees_lightgbm_ranker_rank": AlphaExpertSpec(
         name="ensemble_extra_trees_lightgbm_ranker_rank",
@@ -217,6 +232,7 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of extra_trees and lightgbm_ranker expert predictions.",
         components=("extra_trees", "lightgbm_ranker"),
         combine_method="rank_average",
+        archived=True,
     ),
     "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank": AlphaExpertSpec(
         name="ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
@@ -225,11 +241,12 @@ _ALPHA_EXPERT_SPECS: dict[str, AlphaExpertSpec] = {
         description="Rank-average blend of extra_trees, hist_gbm, and lightgbm_ranker expert predictions.",
         components=("extra_trees", "hist_gbm", "lightgbm_ranker"),
         combine_method="rank_average",
+        archived=True,
     ),
 }
 
 
-def list_alpha_experts() -> tuple[AlphaExpertSpec, ...]:
+def list_alpha_experts(*, include_archived: bool = False) -> tuple[AlphaExpertSpec, ...]:
     """Return all supported alpha experts in a stable order."""
 
     ordered_names = (
@@ -262,13 +279,16 @@ def list_alpha_experts() -> tuple[AlphaExpertSpec, ...]:
         "ensemble_extra_trees_lightgbm_ranker_rank",
         "ensemble_extra_trees_hist_gbm_lightgbm_ranker_rank",
     )
-    return tuple(_ALPHA_EXPERT_SPECS[name] for name in ordered_names)
+    specs = tuple(_ALPHA_EXPERT_SPECS[name] for name in ordered_names)
+    if include_archived:
+        return specs
+    return tuple(spec for spec in specs if not spec.archived)
 
 
-def list_alpha_expert_names() -> tuple[str, ...]:
+def list_alpha_expert_names(*, include_archived: bool = False) -> tuple[str, ...]:
     """Return all supported alpha expert names."""
 
-    return tuple(spec.name for spec in list_alpha_experts())
+    return tuple(spec.name for spec in list_alpha_experts(include_archived=include_archived))
 
 
 def get_alpha_expert(name: str) -> AlphaExpertSpec:
