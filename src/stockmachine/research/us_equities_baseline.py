@@ -673,6 +673,7 @@ def generate_walk_forward_predictions(
     panel: pd.DataFrame,
     *,
     predict_start: str,
+    requested_models: tuple[str, ...] | None = None,
     train_window_days: int | None = None,
     validation_window_days: int | None = None,
     test_window_days: int | None = None,
@@ -685,6 +686,7 @@ def generate_walk_forward_predictions(
 
     panel = panel.copy()
     predict_start_ts = pd.Timestamp(predict_start).normalize()
+    requested_base_model_names, requested_output_model_names = _resolve_prediction_model_scope(requested_models)
     split_config = _build_walk_forward_split_config(
         train_window_days=train_window_days,
         validation_window_days=validation_window_days,
@@ -709,7 +711,7 @@ def generate_walk_forward_predictions(
             continue
 
         split_prediction_frames: dict[str, pd.DataFrame] = {}
-        for model_name in BASE_MODEL_NAMES:
+        for model_name in requested_base_model_names:
             fit_kind = get_trainable_model_fit_kind(model_name) if model_name != "factor_baseline" else "factor"
             predictions = fit_predict_base_model(
                 model_name,
@@ -723,7 +725,10 @@ def generate_walk_forward_predictions(
         prediction_frames.extend(split_prediction_frames.values())
         prediction_frames.extend(
             _attach_split_metadata(frame, split)
-            for frame in build_ensemble_prediction_frames(split_prediction_frames)
+            for frame in build_ensemble_prediction_frames(
+                split_prediction_frames,
+                requested_models=requested_output_model_names,
+            )
         )
 
     if not prediction_frames:
@@ -805,11 +810,18 @@ def _attach_split_metadata(frame: pd.DataFrame, split: WalkForwardSplit) -> pd.D
 
 def build_ensemble_prediction_frames(
     model_frames: dict[str, pd.DataFrame],
+    *,
+    requested_models: tuple[str, ...] | None = None,
 ) -> list[pd.DataFrame]:
     """Build low-risk ensemble prediction frames from aligned base model outputs."""
 
     ensemble_frames: list[pd.DataFrame] = []
-    for model_name in MODEL_NAMES:
+    if requested_models is None:
+        target_model_names = MODEL_NAMES
+    else:
+        target_model_names = tuple(requested_models)
+
+    for model_name in target_model_names:
         spec = get_alpha_expert(model_name)
         if not spec.components or not spec.combine_method:
             continue
@@ -825,6 +837,38 @@ def build_ensemble_prediction_frames(
             )
         )
     return ensemble_frames
+
+
+def _resolve_prediction_model_scope(
+    requested_models: tuple[str, ...] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+    """Resolve the base-model training scope and final output model list."""
+
+    if not requested_models:
+        return BASE_MODEL_NAMES, None
+
+    seen_output_models: set[str] = set()
+    ordered_output_models: list[str] = []
+    seen_base_models: set[str] = set()
+    ordered_base_models: list[str] = []
+
+    def visit(model_name: str) -> None:
+        spec = get_alpha_expert(model_name)
+        if model_name not in seen_output_models:
+            seen_output_models.add(model_name)
+            ordered_output_models.append(model_name)
+        if spec.components:
+            for component in spec.components:
+                visit(component)
+            return
+        if model_name not in seen_base_models:
+            seen_base_models.add(model_name)
+            ordered_base_models.append(model_name)
+
+    for model_name in requested_models:
+        visit(model_name)
+
+    return tuple(ordered_base_models), tuple(ordered_output_models)
 
 
 def get_trainable_model_builders() -> dict[str, Callable[[], object]]:

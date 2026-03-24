@@ -86,3 +86,39 @@ def test_generate_walk_forward_predictions_includes_new_base_models() -> None:
         assert not model_predictions.empty
         assert model_predictions["date"].min() >= pd.Timestamp("2025-03-01")
     assert not predictions.duplicated(subset=["model", "date", "symbol"]).any()
+
+
+def test_generate_walk_forward_predictions_can_limit_to_requested_model_scope() -> None:
+    panel = _synthetic_panel()
+
+    predictions = generate_walk_forward_predictions(
+        panel,
+        predict_start="2025-03-01",
+        requested_models=("extra_trees",),
+        train_window_days=20,
+        validation_window_days=5,
+        test_window_days=10,
+        purge_window_days=1,
+        embargo_window_days=0,
+    )
+
+    assert set(predictions["model"].unique()) == {"extra_trees"}
+    assert not predictions.empty
+
+
+def test_generate_walk_forward_predictions_can_limit_to_requested_ensemble_scope() -> None:
+    panel = _synthetic_panel()
+
+    predictions = generate_walk_forward_predictions(
+        panel,
+        predict_start="2025-03-01",
+        requested_models=("ensemble_extra_trees_hist_gbm_rank",),
+        train_window_days=20,
+        validation_window_days=5,
+        test_window_days=10,
+        purge_window_days=1,
+        embargo_window_days=0,
+    )
+
+    assert set(predictions["model"].unique()) == {"extra_trees", "hist_gbm", "ensemble_extra_trees_hist_gbm_rank"}
+    assert not predictions.empty

@@ -16,7 +16,7 @@ from stockmachine.apps.run_us_equities_paper import (
 )
 from stockmachine.backtest.protocols import AccountSnapshot, MarketBar, PositionSnapshot
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
-from stockmachine.execution import NextOpenOrderExecutionPolicy
+from stockmachine.execution import NextOpenOrderExecutionPolicy, SameSessionMarketOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaBrokerError
 from stockmachine.live import PollingOrderReconciler
 from stockmachine.live.trade_updates import TradeUpdateMessageSource
@@ -76,6 +76,29 @@ def test_build_alpaca_paper_runner_rejects_non_paper_endpoint(monkeypatch, tmp_p
         assert "non-paper trading endpoint" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("Expected non-paper endpoint guard to raise.")
+
+
+def test_build_alpaca_paper_runner_uses_same_session_market_execution_policy(monkeypatch, tmp_path) -> None:
+    class _FakeBroker:
+        def __init__(self) -> None:
+            self.credentials = SimpleNamespace(trading_base_url="https://paper-api.alpaca.markets")
+
+        def is_paper_trading_environment(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.AlpacaTradingAdapter.from_env",
+        lambda: _FakeBroker(),
+    )
+
+    runner, config = build_alpaca_paper_runner(
+        universe=("AAPL",),
+        session_date=date(2026, 3, 22),
+        ledger_path=tmp_path / "paper-ledger.sqlite3",
+    )
+
+    assert isinstance(runner.dependencies.execution_policy, SameSessionMarketOrderExecutionPolicy)
+    assert config.session_date == date(2026, 3, 22)
 
 
 def test_parse_session_date_round_trips_iso_string() -> None:
