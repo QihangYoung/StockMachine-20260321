@@ -16,7 +16,7 @@ from stockmachine.apps.run_us_equities_paper import (
 )
 from stockmachine.backtest.protocols import AccountSnapshot, MarketBar, PositionSnapshot
 from stockmachine.domain.models import OrderIntent, Signal, TargetPosition
-from stockmachine.execution import SameSessionMarketOrderExecutionPolicy
+from stockmachine.execution import NextOpenOrderExecutionPolicy
 from stockmachine.execution.brokers import AlpacaBrokerError
 from stockmachine.live import PollingOrderReconciler
 from stockmachine.live.trade_updates import TradeUpdateMessageSource
@@ -82,8 +82,8 @@ def test_parse_session_date_round_trips_iso_string() -> None:
     assert parse_session_date("2026-03-21") == date(2026, 3, 21)
 
 
-def test_same_session_market_execution_policy_generates_day_market_orders() -> None:
-    policy = SameSessionMarketOrderExecutionPolicy()
+def test_next_open_execution_policy_generates_market_on_open_orders() -> None:
+    policy = NextOpenOrderExecutionPolicy()
     account = AccountSnapshot(session_date=date(2026, 3, 23), cash=10_000.0, equity=10_000.0, gross_exposure=0.0)
     targets = [
         TargetPosition(
@@ -110,7 +110,7 @@ def test_same_session_market_execution_policy_generates_day_market_orders() -> N
     orders = policy.generate_orders(date(2026, 3, 23), targets, bars, account)
 
     assert len(orders) == 1
-    assert orders[0].order_type == "market"
+    assert orders[0].order_type == "market_on_open"
     assert orders[0].quantity == 10
 
 

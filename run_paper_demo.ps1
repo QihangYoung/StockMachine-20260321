@@ -114,8 +114,7 @@ try {
         "--session-date", $SessionDate,
         "--artifact-root", $ArtifactRoot,
         "--ledger-path", $LedgerPath,
-        "--execute",
-        "--require-market-open"
+        "--execute"
     )
     if ($null -ne $ExecutionEquityCap) {
         $runArgs += @(
