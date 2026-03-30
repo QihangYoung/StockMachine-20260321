@@ -241,7 +241,9 @@ The first paper runner can now wire together:
 - white-box portfolio construction
 - broker-aware pre-trade checks
 - session/data/idempotency guard rails
+- same-session `market/day` paper execution with short post-submit polling
 - restart recovery against broker open orders
+- broker-history status backfill for stale ledger orders
 - Alpaca paper account sync
 - local ledger persistence
 - polling-based order reconciliation
@@ -262,6 +264,7 @@ $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --strategy-profil
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --session-date 2026-03-22 --model hist_gbm --run-name stable-smoke --artifact-root artifacts
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops latest-run
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops open-orders
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_backfill --ledger-path artifacts/paper_demo/paper_ledger.sqlite3 latest-run
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily healthcheck
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --strategy-profile us_hist_gbm_random_forest_lightgbm_rank_daily --session-date 2026-03-22 --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --session-date 2026-03-22 --model hist_gbm --run-name stable-daily-demo --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2 --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
@@ -282,6 +285,11 @@ The daily runner also supports a filesystem kill switch at
 auto-discovers a likely research/backtest artifact directory, runs the same
 preflight path as `paper_daily`, and returns the recommended follow-up
 commands for reconcile and maintenance.
+
+If a broker order already filled but the local ledger is still showing
+`pending_new`, run `paper_backfill` before maintenance. It refreshes the
+recorded order ids from broker history and writes any missing fills and fill
+audits into the ledger.
 
 Built-in paper strategy profiles now live under
 [`configs/strategies`](/E:/CodeX/StockMachine-260321/configs/strategies). The

@@ -21,7 +21,7 @@ from stockmachine.execution.brokers import AlpacaBrokerError
 from stockmachine.live import PollingOrderReconciler
 from stockmachine.live.trade_updates import TradeUpdateMessageSource
 from stockmachine.risk import validate_client_order_id
-from stockmachine.state import LocalLedger, OrderRecord, RunManifestRecord, RunRecord
+from stockmachine.state import LocalLedger, OrderDecisionRecord, OrderRecord, RunManifestRecord, RunRecord
 
 
 def test_paper_runner_cli_parses_core_flags() -> None:
@@ -1070,3 +1070,111 @@ def test_runner_records_recovery_meta_before_new_work(tmp_path, monkeypatch) -> 
     assert payload["meta"]["recovery"]["aligned_open_orders"] == 1
     assert payload["meta"]["recovery"]["orphan_broker_orders"] == 0
     assert payload["meta"]["recovery"]["stale_ledger_orders"] == 0
+
+
+@dataclass(slots=True)
+class _EmptyOpenOrderProvider:
+    def list_orders(self, *, status: str | None = None, symbols: list[str] | None = None):
+        return []
+
+
+@dataclass(slots=True)
+class _FilledOrderStatusProvider:
+    def get_order(self, order_id: str):
+        assert order_id == "existing-order-2"
+        return {
+            "id": "existing-order-2",
+            "client_order_id": "existing-client-2",
+            "symbol": "AAPL",
+            "side": "buy",
+            "status": "filled",
+            "qty": 5,
+            "filled_qty": 5,
+            "type": "market",
+            "submitted_at": "2026-03-22T01:00:00+00:00",
+            "updated_at": "2026-03-22T01:05:00+00:00",
+            "avg_fill_price": 100.5,
+        }
+
+
+def test_runner_backfills_stale_ledger_orders_from_broker_history(tmp_path, monkeypatch) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    ledger.record_order_decision(
+        OrderDecisionRecord(
+            decision_id="decision-1",
+            run_id="old-run",
+            session_date=date(2026, 3, 22),
+            client_order_id="existing-client-2",
+            symbol="AAPL",
+            side="BUY",
+            decision_type="risk_gate",
+            decision_price=100.0,
+            estimated_notional=500.0,
+            approved=True,
+            reason="approved",
+            decision_at_utc=datetime(2026, 3, 22, 0, 59, tzinfo=timezone.utc),
+            meta={},
+        )
+    )
+    ledger.upsert_order(
+        OrderRecord(
+            order_id="existing-order-2",
+            run_id="old-run",
+            session_date=date(2026, 3, 22),
+            client_order_id="existing-client-2",
+            symbol="AAPL",
+            side="buy",
+            quantity=5,
+            order_type="market",
+            limit_price=None,
+            status="pending_new",
+            filled_quantity=0,
+            avg_fill_price=None,
+            submitted_at_utc=datetime(2026, 3, 22, 1, 0, tzinfo=timezone.utc),
+            updated_at_utc=datetime(2026, 3, 22, 1, 0, tzinfo=timezone.utc),
+            broker_payload={},
+        )
+    )
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            market_data_provider=_OneMarketDataProvider(),
+            open_order_provider=_EmptyOpenOrderProvider(),
+            order_status_provider=_FilledOrderStatusProvider(),
+            ledger=ledger,
+            reconciler=PollingOrderReconciler(ledger),
+        )
+    )
+    monkeypatch.setattr(
+        PaperRunner,
+        "_available_silver_session_dates",
+        lambda self: (date(2026, 3, 22),),
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 22),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="history-backfill-run",
+        )
+    )
+
+    payload = report.to_dict()
+    order = ledger.get_order("existing-order-2")
+    fills = ledger.list_fills(order_id="existing-order-2")
+    fill_audits = ledger.list_fill_audits(order_id="existing-order-2")
+
+    assert payload["status"] == "success"
+    assert payload["meta"]["recovery"]["stale_ledger_orders"] == 1
+    assert payload["meta"]["recovery"]["history_backfill"]["requested_orders"] == 1
+    assert payload["meta"]["recovery"]["history_backfill"]["reconciliation"]["fill_events_created"] == 1
+    assert order is not None
+    assert order.status == "filled"
+    assert len(fills) == 1
+    assert len(fill_audits) == 1

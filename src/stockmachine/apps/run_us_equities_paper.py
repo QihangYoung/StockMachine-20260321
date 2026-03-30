@@ -32,7 +32,9 @@ from stockmachine.live import (
     SessionGuard,
     SessionGuardRequest,
     TradeUpdateMessageSource,
+    backfill_order_statuses,
     recover_open_orders,
+    record_fill_audits_for_orders,
     stream_trade_updates,
 )
 from stockmachine.monitoring.reports import (
@@ -63,7 +65,6 @@ from stockmachine.risk import (
 )
 from stockmachine.state import (
     EquitySnapshotRecord,
-    FillAuditRecord,
     LocalLedger,
     OrderDecisionRecord,
     OrderRecord,
@@ -711,6 +712,7 @@ class PaperRunner:
                 account = self.dependencies.account_provider.get_account_snapshot(runtime_session_date)
 
             recovered_open_orders: tuple[Mapping[str, Any] | object, ...] = ()
+            ledger_open_orders = tuple(ledger.list_open_orders()) if ledger is not None else ()
             if ledger is not None and self.dependencies.open_order_provider is not None:
                 broker_open_orders = tuple(self.dependencies.open_order_provider.list_orders(status="open"))
                 recovered_open_orders = broker_open_orders
@@ -728,6 +730,15 @@ class PaperRunner:
                     "reconciled_fill_events": recovery_result.reconciliation.fill_events_created,
                     "status_counts": recovery_result.reconciliation.status_counts,
                 }
+                if ledger_open_orders and self.dependencies.order_status_provider is not None:
+                    history_backfill = backfill_order_statuses(
+                        ledger,
+                        self.dependencies.order_status_provider,
+                        candidate_orders=ledger_open_orders,
+                        reconciler=self.dependencies.reconciler or PollingOrderReconciler(ledger),
+                    )
+                    meta["recovery"]["history_backfill"] = history_backfill.to_dict()
+                    meta["recovery"]["reconciled_fill_events"] += history_backfill.reconciliation.fill_events_created
 
             if ledger is not None:
                 ledger.record_equity_snapshot(
@@ -906,11 +917,15 @@ class PaperRunner:
                             )
                             counts["reconciled_orders"] += follow_up["reconciled_orders"]
                             meta["post_submit_poll"] = follow_up["meta"]
-                        fill_audits_created = self._record_fill_audits(
-                            ledger=ledger,
-                            run_id=run_id,
-                            session_date=runtime_session_date,
-                            order_contexts=order_contexts,
+                        fill_audits_created = record_fill_audits_for_orders(
+                            ledger,
+                            candidate_orders=[
+                                order_record
+                                for order_id in order_contexts
+                                for order_record in [ledger.get_order(order_id)]
+                                if order_record is not None
+                            ],
+                            context_overrides=order_contexts,
                         )
                         meta["reconciliation"]["fill_audits_created"] = fill_audits_created
             elif not approved_orders:
@@ -1230,58 +1245,6 @@ class PaperRunner:
             }
         return order_contexts
 
-    def _record_fill_audits(
-        self,
-        *,
-        ledger: LocalLedger,
-        run_id: str,
-        session_date: date,
-        order_contexts: Mapping[str, Mapping[str, Any]],
-    ) -> int:
-        existing_audit_ids = {audit.audit_id for audit in ledger.list_fill_audits(run_id=run_id)}
-        created = 0
-
-        for order_id, context in order_contexts.items():
-            order_record = ledger.get_order(order_id)
-            if order_record is None:
-                continue
-            fills = ledger.list_fills(order_id=order_id, run_id=run_id)
-            for fill in fills:
-                audit_id = f"audit:{fill.fill_id}"
-                if audit_id in existing_audit_ids:
-                    continue
-                expected_price = self._coerce_optional_float(context.get("expected_price"))
-                slippage = self._estimate_fill_slippage(
-                    side=str(context.get("side") or fill.side),
-                    expected_price=expected_price,
-                    fill_price=float(fill.price),
-                )
-                fee = self._coerce_optional_float(context.get("order_meta", {}).get("fee_estimate"))
-                ledger.record_fill_audit(
-                    FillAuditRecord(
-                        audit_id=audit_id,
-                        order_id=fill.order_id,
-                        run_id=run_id,
-                        session_date=order_record.session_date or session_date,
-                        client_order_id=str(context.get("client_order_id") or order_record.client_order_id or ""),
-                        symbol=fill.symbol,
-                        side=fill.side,
-                        quantity=fill.quantity,
-                        expected_price=expected_price,
-                        price=fill.price,
-                        slippage=slippage,
-                        fee=fee,
-                        filled_at_utc=fill.filled_at_utc,
-                        meta={
-                            "broker_order_status": order_record.status,
-                        },
-                    )
-                )
-                existing_audit_ids.add(audit_id)
-                created += 1
-
-        return created
-
     def _build_position_exit_plan(
         self,
         *,
@@ -1597,28 +1560,6 @@ class PaperRunner:
         if reference_price is None:
             return 0.0
         return float(quantity) * float(reference_price)
-
-    def _estimate_fill_slippage(
-        self,
-        *,
-        side: str,
-        expected_price: float | None,
-        fill_price: float,
-    ) -> float | None:
-        if expected_price is None:
-            return None
-        normalized_side = side.upper()
-        if normalized_side == "SELL":
-            return float(expected_price) - float(fill_price)
-        return float(fill_price) - float(expected_price)
-
-    def _coerce_optional_float(self, value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
 
     def _poll_submitted_orders(
         self,

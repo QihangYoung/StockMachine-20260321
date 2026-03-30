@@ -1,4 +1,10 @@
 from .account_sync import AccountSyncResult, AlpacaAccountSync, sync_account_snapshot
+from .backfill import (
+    OrderStatusBackfillError,
+    OrderStatusBackfillResult,
+    backfill_order_statuses,
+    record_fill_audits_for_orders,
+)
 from .order_maintenance import (
     MaintenanceCandidate,
     OrderMaintenanceExecutionResult,
@@ -49,6 +55,8 @@ __all__ = [
     "OrderMaintenancePlan",
     "OrderMaintenancePolicy",
     "OrderMaintenanceSummary",
+    "OrderStatusBackfillError",
+    "OrderStatusBackfillResult",
     "OrderUpdateEvent",
     "OrderReconciliationChange",
     "PollingOrderReconciler",
@@ -63,6 +71,7 @@ __all__ = [
     "TradeUpdateMessageSource",
     "TradeUpdateStreamResult",
     "apply_order_maintenance_plan",
+    "backfill_order_statuses",
     "build_order_maintenance_summary",
     "build_recovery_plan",
     "evaluate_daily_run_governance",
@@ -71,6 +80,7 @@ __all__ = [
     "load_broker_open_orders_from_json",
     "poll_trade_updates",
     "recover_open_orders",
+    "record_fill_audits_for_orders",
     "stream_trade_updates",
     "sync_account_snapshot",
 ]
