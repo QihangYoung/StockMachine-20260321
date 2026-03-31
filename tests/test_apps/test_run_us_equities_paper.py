@@ -4,11 +4,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pandas as pd
+
 from stockmachine.apps.run_us_equities_paper import (
     AlpacaOrderSubmitter,
     PaperRunConfig,
     PaperRunDependencies,
     PaperRunner,
+    SilverDatasetCache,
+    SilverWalkForwardSignalModel,
     build_arg_parser,
     build_alpaca_paper_runner,
     build_demo_runner,
@@ -103,6 +107,119 @@ def test_build_alpaca_paper_runner_uses_same_session_market_execution_policy(mon
 
 def test_parse_session_date_round_trips_iso_string() -> None:
     assert parse_session_date("2026-03-21") == date(2026, 3, 21)
+
+
+def test_silver_walk_forward_signal_model_uses_latest_partial_current_test_for_paper(monkeypatch) -> None:
+    cache = SilverDatasetCache()
+    dataset = {
+        "daily_bar": pd.DataFrame({"session_date": ["2026-03-20"], "symbol": ["AAPL"]}),
+        "symbol_master": pd.DataFrame(),
+        "industry_membership": pd.DataFrame(),
+    }
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(SilverDatasetCache, "load", lambda self: dataset)
+    monkeypatch.setattr(SilverDatasetCache, "resolve_session_date", lambda self, requested_date: date(2026, 3, 20))
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.build_price_panel_from_silver",
+        lambda _dataset: pd.DataFrame({"date": pd.to_datetime(["2026-03-20"]), "symbol": ["AAPL"]}),
+    )
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.build_point_in_time_metadata_history",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    def _fake_build_research_frame(price_data, *, benchmark_symbol, horizon, symbol_metadata=None, drop_unlabeled_rows=True):
+        seen["drop_unlabeled_rows"] = drop_unlabeled_rows
+        return pd.DataFrame({"date": pd.to_datetime(["2026-03-20"]), "symbol": ["AAPL"]})
+
+    def _fake_generate_walk_forward_predictions(panel, **kwargs):
+        seen["include_partial_current_test"] = kwargs.get("include_partial_current_test")
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-03-20"]),
+                "symbol": ["AAPL"],
+                "sector": ["Tech"],
+                "industry": ["Hardware"],
+                "close": [100.0],
+                "vol_20": [0.02],
+                "median_dollar_volume_20": [60_000_000.0],
+                "target": [pd.NA],
+                "future_return": [pd.NA],
+                "benchmark_future_return": [pd.NA],
+                "score": [0.9],
+                "confidence": [0.8],
+                "model": ["extra_trees"],
+                "split_fold_index": [8],
+                "split_anchor_date": pd.to_datetime(["2025-09-02"]),
+                "split_train_start": pd.to_datetime(["2022-02-07"]),
+                "split_train_end": pd.to_datetime(["2025-02-11"]),
+                "split_validation_start": pd.to_datetime(["2025-02-21"]),
+                "split_validation_end": pd.to_datetime(["2025-08-21"]),
+                "split_test_start": pd.to_datetime(["2025-09-02"]),
+                "split_test_end": pd.to_datetime(["2026-03-20"]),
+            }
+        )
+
+    monkeypatch.setattr("stockmachine.apps.run_us_equities_paper.build_research_frame", _fake_build_research_frame)
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.generate_walk_forward_predictions",
+        _fake_generate_walk_forward_predictions,
+    )
+
+    model = SilverWalkForwardSignalModel(dataset_cache=cache, model_name="extra_trees", horizon_bars=5)
+    signals = model.predict(date(2026, 3, 31), ["AAPL"])
+
+    assert seen["drop_unlabeled_rows"] is False
+    assert seen["include_partial_current_test"] is True
+    assert len(signals) == 1
+    assert signals[0].meta["prediction_date"] == "2026-03-20"
+    assert signals[0].meta["training_window_start"] == "2022-02-07"
+    assert signals[0].meta["validation_window_end"] == "2025-08-21"
+    assert signals[0].meta["prediction_window_end"] == "2026-03-20"
+    assert model.last_prediction_context == {
+        "prediction_date": "2026-03-20",
+        "split_fold_index": 8,
+        "split_anchor_date": "2025-09-02",
+        "training_window": {"start": "2022-02-07", "end": "2025-02-11"},
+        "validation_window": {"start": "2025-02-21", "end": "2025-08-21"},
+        "prediction_window": {"start": "2025-09-02", "end": "2026-03-20"},
+    }
+
+
+@dataclass(slots=True)
+class _OneSignalModelWithPredictionContext:
+    symbol: str = "AAPL"
+    last_prediction_context: dict[str, object] | None = None
+
+    def predict(self, session_date: date, universe: list[str]) -> list[Signal]:
+        self.last_prediction_context = {
+            "prediction_date": "2026-03-20",
+            "training_window": {"start": "2022-02-07", "end": "2025-02-11"},
+            "validation_window": {"start": "2025-02-21", "end": "2025-08-21"},
+            "prediction_window": {"start": "2025-09-02", "end": "2026-03-20"},
+        }
+        return [
+            Signal(
+                symbol=self.symbol,
+                side="LONG",
+                score=1.0,
+                confidence=0.9,
+                horizon_bars=5,
+                timestamp=datetime(2026, 3, 22, tzinfo=timezone.utc),
+                meta={
+                    "close": 100.0,
+                    "reference_price": 100.0,
+                    "prediction_date": "2026-03-20",
+                    "training_window_start": "2022-02-07",
+                    "training_window_end": "2025-02-11",
+                    "validation_window_start": "2025-02-21",
+                    "validation_window_end": "2025-08-21",
+                    "prediction_window_start": "2025-09-02",
+                    "prediction_window_end": "2026-03-20",
+                },
+            )
+        ]
 
 
 def test_next_open_execution_policy_generates_market_on_open_orders() -> None:
@@ -484,6 +601,43 @@ def test_runner_execute_path_records_orders_and_fills(tmp_path) -> None:
     assert fill_audits[0].run_id == payload["run_id"]
     assert fill_audits[0].expected_price == 100.0
     assert fill_audits[0].slippage == 0.25
+
+
+def test_runner_records_prediction_window_context_in_manifest(tmp_path) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModelWithPredictionContext(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            market_data_provider=_OneMarketDataProvider(),
+            ledger=ledger,
+        )
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 22),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="prediction-window-test",
+        )
+    )
+
+    payload = report.to_dict()
+    manifest = ledger.get_run_manifest(payload["run_id"])
+
+    assert manifest is not None
+    assert manifest.meta["prediction_context"] == {
+        "prediction_date": "2026-03-20",
+        "training_window": {"start": "2022-02-07", "end": "2025-02-11"},
+        "validation_window": {"start": "2025-02-21", "end": "2025-08-21"},
+        "prediction_window": {"start": "2025-09-02", "end": "2026-03-20"},
+    }
+    assert payload["meta"]["prediction_context"]["prediction_window"]["end"] == "2026-03-20"
 
 
 def test_runner_skips_new_buys_when_existing_positions_are_not_mature(tmp_path, monkeypatch) -> None:

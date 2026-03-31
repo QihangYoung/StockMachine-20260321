@@ -9,6 +9,40 @@ from stockmachine.apps.run_us_equities_paper import PaperRunConfig
 from stockmachine.monitoring.reports import PaperRunFailure, build_paper_run_report
 
 
+def _make_run_args(**overrides) -> Namespace:
+    args = {
+        "session_date": "2026-03-22",
+        "universe": ["AAPL"],
+        "run_name": "daily-smoke",
+        "execute": False,
+        "demo_mode": False,
+        "model": "hist_gbm",
+        "top_k": 10,
+        "horizon": 5,
+        "data_root": "data",
+        "ledger_path": "artifacts/paper_demo/paper_ledger.sqlite3",
+        "min_close": 10.0,
+        "min_median_dollar_volume_20": 50_000_000.0,
+        "max_vol_20": 0.04,
+        "max_positions_per_sector": 2,
+        "disable_sector_neutral": False,
+        "require_market_open": False,
+        "min_buying_power_buffer": 0.0,
+        "max_order_notional": None,
+        "max_total_notional": None,
+        "max_total_orders": None,
+        "execution_equity_cap": 500.0,
+        "post_submit_poll_seconds": 15.0,
+        "post_submit_poll_interval_seconds": 2.0,
+        "allow_unhealthy": False,
+        "artifact_dir": None,
+        "artifact_root": "artifacts",
+        "strategy_profile": None,
+    }
+    args.update(overrides)
+    return Namespace(**args)
+
+
 def test_run_command_happy_path_uses_builder_and_runner(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -53,39 +87,17 @@ def test_run_command_happy_path_uses_builder_and_runner(monkeypatch) -> None:
             data_freshness_meta={"resolution": "exact"},
         ),
     )
-
-    payload = paper_daily.run_command(
-        Namespace(
-            session_date="2026-03-22",
-            universe=["AAPL"],
-            run_name="daily-smoke",
-            execute=False,
-            demo_mode=False,
-            model="hist_gbm",
-            top_k=10,
-            horizon=5,
-            data_root="data",
-            ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
-            min_close=10.0,
-            min_median_dollar_volume_20=50_000_000.0,
-            max_vol_20=0.04,
-            max_positions_per_sector=2,
-            disable_sector_neutral=False,
-            require_market_open=False,
-            min_buying_power_buffer=0.0,
-            max_order_notional=None,
-            max_total_notional=None,
-            max_total_orders=None,
-            execution_equity_cap=500.0,
-            post_submit_poll_seconds=15.0,
-            post_submit_poll_interval_seconds=2.0,
-            allow_unhealthy=False,
-            artifact_dir=None,
-        )
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {"ok": True, "performed": False, "skipped": True, "reason": "test_stub"},
     )
+
+    payload = paper_daily.run_command(_make_run_args())
 
     assert payload["ok"] is True
     assert payload["command"] == "run"
+    assert payload["silver_refresh"]["reason"] == "test_stub"
     assert payload["preflight"]["allowed"] is True
     assert payload["run"]["report"]["run_id"] == "run-123"
     assert payload["post_run"]["ok"] is True
@@ -128,36 +140,13 @@ def test_run_command_blocks_on_unhealthy_preflight_without_override(monkeypatch)
         "build_demo_runner",
         lambda universe: (_ for _ in ()).throw(AssertionError("demo runner should not be built")),
     )
-
-    payload = paper_daily.run_command(
-        Namespace(
-            session_date="2026-03-22",
-            universe=["AAPL"],
-            run_name="daily-smoke",
-            execute=False,
-            demo_mode=False,
-            model="hist_gbm",
-            top_k=10,
-            horizon=5,
-            data_root="data",
-            ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
-            min_close=10.0,
-            min_median_dollar_volume_20=50_000_000.0,
-            max_vol_20=0.04,
-            max_positions_per_sector=2,
-            disable_sector_neutral=False,
-            require_market_open=False,
-            min_buying_power_buffer=0.0,
-            max_order_notional=None,
-            max_total_notional=None,
-            max_total_orders=None,
-            execution_equity_cap=500.0,
-            post_submit_poll_seconds=15.0,
-            post_submit_poll_interval_seconds=2.0,
-            allow_unhealthy=False,
-            artifact_dir=None,
-        )
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {"ok": True, "performed": False, "skipped": True, "reason": "test_stub"},
     )
+
+    payload = paper_daily.run_command(_make_run_args())
 
     assert payload["ok"] is False
     assert payload["summary"]["decision"] == "blocked_preflight"
@@ -204,36 +193,13 @@ def test_run_command_allows_override_for_unhealthy_preflight(monkeypatch) -> Non
         lambda **kwargs: {"ok": True, "reconciliation": {"run_id": kwargs["run_id"]}},
     )
     monkeypatch.setattr(paper_daily, "build_alpaca_paper_runner", lambda **kwargs: (_Runner(), PaperRunConfig(session_date=date(2026, 3, 22), dry_run=True, universe=("AAPL",))))
-
-    payload = paper_daily.run_command(
-        Namespace(
-            session_date="2026-03-22",
-            universe=["AAPL"],
-            run_name="daily-smoke",
-            execute=False,
-            demo_mode=False,
-            model="hist_gbm",
-            top_k=10,
-            horizon=5,
-            data_root="data",
-            ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
-            min_close=10.0,
-            min_median_dollar_volume_20=50_000_000.0,
-            max_vol_20=0.04,
-            max_positions_per_sector=2,
-            disable_sector_neutral=False,
-            require_market_open=False,
-            min_buying_power_buffer=0.0,
-            max_order_notional=None,
-            max_total_notional=None,
-            max_total_orders=None,
-            execution_equity_cap=500.0,
-            post_submit_poll_seconds=15.0,
-            post_submit_poll_interval_seconds=2.0,
-            allow_unhealthy=True,
-            artifact_dir=None,
-        )
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {"ok": True, "performed": False, "skipped": True, "reason": "test_stub"},
     )
+
+    payload = paper_daily.run_command(_make_run_args(allow_unhealthy=True))
 
     assert payload["ok"] is True
     assert payload["summary"]["decision"] == "executed_with_override"
@@ -289,36 +255,18 @@ def test_run_command_marks_failed_report_as_not_ok(monkeypatch) -> None:
         "_safe_build_post_run_payload",
         lambda **kwargs: {"ok": True, "reconciliation": {"run_id": kwargs["run_id"]}},
     )
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {"ok": True, "performed": False, "skipped": True, "reason": "test_stub"},
+    )
 
     payload = paper_daily.run_command(
-        Namespace(
-            session_date="2026-03-22",
-            universe=["AAPL"],
+        _make_run_args(
             run_name="daily-failed",
             execute=True,
-            demo_mode=False,
-            model="hist_gbm",
-            top_k=10,
-            horizon=5,
-            data_root="data",
-            ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
-            min_close=10.0,
-            min_median_dollar_volume_20=50_000_000.0,
-            max_vol_20=0.04,
-            max_positions_per_sector=2,
-            disable_sector_neutral=False,
             require_market_open=True,
-            min_buying_power_buffer=0.0,
-            max_order_notional=None,
-            max_total_notional=None,
-            max_total_orders=None,
             execution_equity_cap=None,
-            post_submit_poll_seconds=15.0,
-            post_submit_poll_interval_seconds=2.0,
-            allow_unhealthy=False,
-            artifact_dir=None,
-            artifact_root="artifacts",
-            strategy_profile=None,
         )
     )
 
@@ -326,6 +274,96 @@ def test_run_command_marks_failed_report_as_not_ok(monkeypatch) -> None:
     assert payload["summary"]["decision"] == "failed"
     assert payload["summary"]["report_status"] == "failed"
     assert payload["run"]["report"]["run_id"] == "run-failed-123"
+
+
+def test_run_command_fails_when_silver_refresh_cannot_reach_latest_completed_session(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {
+            "ok": False,
+            "performed": True,
+            "skipped": False,
+            "reason": "refresh_left_silver_stale",
+            "latest_local_session_before_refresh": "2026-03-20",
+            "latest_local_session_after_refresh": "2026-03-24",
+        },
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_paper_daily_preflight",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("preflight should not run when refresh fails")),
+    )
+
+    payload = paper_daily.run_command(_make_run_args())
+
+    assert payload["ok"] is False
+    assert payload["summary"]["stage"] == "silver_refresh_failed"
+    assert payload["error"]["type"] == "SilverRefreshError"
+    assert payload["silver_refresh"]["reason"] == "refresh_left_silver_stale"
+
+
+def test_maybe_refresh_silver_before_run_refreshes_to_latest_completed_session(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    session_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_daily_bar_session_date",
+        lambda storage: next(session_dates),
+    )
+
+    def _collect_research_seed(**kwargs):
+        observed["collector_kwargs"] = kwargs
+        return {"normalized_rows": 123}
+
+    monkeypatch.setattr(paper_daily, "collect_research_seed", _collect_research_seed)
+
+    payload = paper_daily.maybe_refresh_silver_before_run(
+        session_date=date(2026, 3, 24),
+        data_root="data",
+        demo_mode=False,
+        skip_refresh=False,
+        feed="iex",
+        adjustment="raw",
+        chunk_size=25,
+        include_symbol_master=False,
+    )
+
+    assert payload["ok"] is True
+    assert payload["reason"] == "refresh_completed"
+    assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 21)
+    assert observed["collector_kwargs"]["end_date"] == date(2026, 3, 23)
+
+
+def test_maybe_refresh_silver_before_run_fails_when_dataset_remains_stale(monkeypatch) -> None:
+    session_dates = iter([date(2026, 3, 20), date(2026, 3, 20)])
+
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_daily_bar_session_date",
+        lambda storage: next(session_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "collect_research_seed",
+        lambda **kwargs: {"normalized_rows": 0},
+    )
+
+    payload = paper_daily.maybe_refresh_silver_before_run(
+        session_date=date(2026, 3, 24),
+        data_root="data",
+        demo_mode=False,
+        skip_refresh=False,
+        feed="iex",
+        adjustment="raw",
+        chunk_size=25,
+        include_symbol_master=False,
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "refresh_left_silver_stale"
+    assert payload["refresh_end_date"] == "2026-03-23"
 
 
 def test_healthcheck_command_uses_helper(monkeypatch) -> None:

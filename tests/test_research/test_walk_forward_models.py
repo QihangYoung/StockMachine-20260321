@@ -7,8 +7,8 @@ from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.research.us_equities_baseline import FEATURE_COLUMNS, generate_walk_forward_predictions
 
 
-def _synthetic_panel() -> pd.DataFrame:
-    dates = pd.date_range("2025-01-02", "2025-03-31", freq="B")
+def _synthetic_panel(*, end: str = "2025-03-31") -> pd.DataFrame:
+    dates = pd.date_range("2025-01-02", end, freq="B")
     symbols = ("AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL")
     sectors = {
         "AAPL": "Tech",
@@ -81,6 +81,14 @@ def test_generate_walk_forward_predictions_includes_new_base_models() -> None:
     assert {"score", "confidence", "target", "future_return", "benchmark_future_return"}.issubset(
         predictions.columns
     )
+    assert {
+        "split_train_start",
+        "split_train_end",
+        "split_validation_start",
+        "split_validation_end",
+        "split_test_start",
+        "split_test_end",
+    }.issubset(predictions.columns)
     for model_name in expected_models:
         model_predictions = predictions[predictions["model"] == model_name]
         assert not model_predictions.empty
@@ -122,3 +130,26 @@ def test_generate_walk_forward_predictions_can_limit_to_requested_ensemble_scope
 
     assert set(predictions["model"].unique()) == {"extra_trees", "hist_gbm", "ensemble_extra_trees_hist_gbm_rank"}
     assert not predictions.empty
+
+
+def test_generate_walk_forward_predictions_can_include_partial_current_test_tail() -> None:
+    panel = _synthetic_panel(end="2025-04-08")
+    unlabeled_mask = panel["date"] >= pd.Timestamp("2025-04-01")
+    panel.loc[unlabeled_mask, ["target", "future_return", "benchmark_future_return"]] = np.nan
+
+    predictions = generate_walk_forward_predictions(
+        panel,
+        predict_start="2025-04-01",
+        requested_models=("extra_trees",),
+        train_window_days=20,
+        validation_window_days=5,
+        test_window_days=10,
+        purge_window_days=1,
+        embargo_window_days=0,
+        include_partial_current_test=True,
+    )
+
+    assert set(predictions["model"].unique()) == {"extra_trees"}
+    assert not predictions.empty
+    assert predictions["date"].max() == pd.Timestamp("2025-04-08")
+    assert predictions.loc[predictions["date"] == pd.Timestamp("2025-04-08"), "target"].isna().all()

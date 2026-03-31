@@ -26,6 +26,7 @@ def test_paper_smoke_autolinks_artifacts_and_builds_commands(tmp_path, monkeypat
             "command": "run",
             "ok": True,
             "summary": {"decision": "executed"},
+            "silver_refresh": {"ok": True, "reason": "refresh_completed"},
             "preflight": {"allowed": True},
             "run": {"report": {"run_id": "run-smoke"}},
             "post_run": {"ok": True, "reconciliation": {"found": True}},
@@ -53,6 +54,7 @@ def test_paper_smoke_autolinks_artifacts_and_builds_commands(tmp_path, monkeypat
     assert output["artifact_link"]["artifact_dir"] == str(artifact_dir)
     assert output["artifact_link"]["exists"] is True
     assert output["run_id"] == "run-smoke"
+    assert output["silver_refresh"]["reason"] == "refresh_completed"
     assert output["recommended_commands"]["paper_reconcile"][0] == "python"
     assert "--run-id" in output["recommended_commands"]["paper_reconcile"]
     assert str(artifact_dir) in output["recommended_commands"]["paper_reconcile"]

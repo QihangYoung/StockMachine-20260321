@@ -121,6 +121,7 @@ def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
         "dry_run": not args.execute,
         "artifact_link": artifact_link.to_dict(),
         "summary": run_payload.get("summary") if isinstance(run_payload, Mapping) else None,
+        "silver_refresh": run_payload.get("silver_refresh") if isinstance(run_payload, Mapping) else None,
         "preflight": run_payload.get("preflight") if isinstance(run_payload, Mapping) else None,
         "run": run_payload.get("run") if isinstance(run_payload, Mapping) else None,
         "post_run": run_payload.get("post_run") if isinstance(run_payload, Mapping) else None,

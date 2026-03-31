@@ -98,6 +98,45 @@ def build_walk_forward_splits(
     return tuple(splits)
 
 
+def build_latest_partial_walk_forward_split(
+    frame: pd.DataFrame,
+    *,
+    config: WalkForwardSplitConfig | None = None,
+    fold_index: int = 0,
+) -> WalkForwardSplit | None:
+    """Build the newest incomplete walk-forward split, if one exists.
+
+    This is useful for live or paper inference where we want to score the
+    latest available feature rows even though the current test window has not
+    finished yet. Strict historical evaluation should continue using only the
+    fully completed splits from ``build_walk_forward_splits``.
+    """
+
+    if config is None:
+        config = WalkForwardSplitConfig()
+    _validate_config(config)
+    if frame.empty:
+        return None
+    if config.date_column not in frame.columns:
+        raise KeyError(f"Frame is missing required date column '{config.date_column}'.")
+
+    prepared = _prepare_frame(frame, date_column=config.date_column)
+    unique_dates = _unique_dates(prepared, date_column=config.date_column)
+    anchor_positions = _monthly_anchor_positions(unique_dates, roll_frequency=config.roll_frequency)
+
+    for anchor_position in reversed(anchor_positions):
+        split = _build_partial_split(
+            prepared,
+            unique_dates=unique_dates,
+            anchor_position=anchor_position,
+            fold_index=fold_index,
+            config=config,
+        )
+        if split is not None:
+            return split
+    return None
+
+
 def _build_split(
     frame: pd.DataFrame,
     *,
@@ -106,6 +145,70 @@ def _build_split(
     fold_index: int,
     config: WalkForwardSplitConfig,
 ) -> WalkForwardSplit | None:
+    bounds = _resolve_split_index_bounds(
+        unique_dates=unique_dates,
+        anchor_position=anchor_position,
+        config=config,
+    )
+    if bounds is None or bounds["test_end_idx"] >= len(unique_dates):
+        return None
+
+    return _materialize_split(
+        frame,
+        unique_dates=unique_dates,
+        fold_index=fold_index,
+        config=config,
+        train_start_idx=bounds["train_start_idx"],
+        train_end_idx=bounds["train_end_idx"],
+        validation_start_idx=bounds["validation_start_idx"],
+        validation_end_idx=bounds["validation_end_idx"],
+        test_start_idx=bounds["test_start_idx"],
+        test_end_idx=bounds["test_end_idx"],
+    )
+
+
+def _build_partial_split(
+    frame: pd.DataFrame,
+    *,
+    unique_dates: pd.Index,
+    anchor_position: int,
+    fold_index: int,
+    config: WalkForwardSplitConfig,
+) -> WalkForwardSplit | None:
+    bounds = _resolve_split_index_bounds(
+        unique_dates=unique_dates,
+        anchor_position=anchor_position,
+        config=config,
+    )
+    if bounds is None:
+        return None
+    if bounds["test_end_idx"] < len(unique_dates):
+        return None
+
+    partial_test_end_idx = len(unique_dates) - 1
+    if partial_test_end_idx < bounds["test_start_idx"]:
+        return None
+
+    return _materialize_split(
+        frame,
+        unique_dates=unique_dates,
+        fold_index=fold_index,
+        config=config,
+        train_start_idx=bounds["train_start_idx"],
+        train_end_idx=bounds["train_end_idx"],
+        validation_start_idx=bounds["validation_start_idx"],
+        validation_end_idx=bounds["validation_end_idx"],
+        test_start_idx=bounds["test_start_idx"],
+        test_end_idx=partial_test_end_idx,
+    )
+
+
+def _resolve_split_index_bounds(
+    *,
+    unique_dates: pd.Index,
+    anchor_position: int,
+    config: WalkForwardSplitConfig,
+) -> dict[str, int] | None:
     test_start_idx = anchor_position
     validation_end_idx = test_start_idx - config.purge_window_days - 1
     validation_start_idx = validation_end_idx - config.validation_window_days + 1
@@ -117,13 +220,35 @@ def _build_split(
         train_start_idx < 0
         or validation_start_idx < 0
         or validation_end_idx < 0
-        or test_end_idx >= len(unique_dates)
         or train_end_idx < train_start_idx
         or validation_end_idx < validation_start_idx
         or test_end_idx < test_start_idx
     ):
         return None
 
+    return {
+        "train_start_idx": train_start_idx,
+        "train_end_idx": train_end_idx,
+        "validation_start_idx": validation_start_idx,
+        "validation_end_idx": validation_end_idx,
+        "test_start_idx": test_start_idx,
+        "test_end_idx": test_end_idx,
+    }
+
+
+def _materialize_split(
+    frame: pd.DataFrame,
+    *,
+    unique_dates: pd.Index,
+    fold_index: int,
+    config: WalkForwardSplitConfig,
+    train_start_idx: int,
+    train_end_idx: int,
+    validation_start_idx: int,
+    validation_end_idx: int,
+    test_start_idx: int,
+    test_end_idx: int,
+) -> WalkForwardSplit | None:
     train_start = unique_dates[train_start_idx]
     train_end = unique_dates[train_end_idx]
     validation_start = unique_dates[validation_start_idx]

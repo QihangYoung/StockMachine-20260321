@@ -42,7 +42,12 @@ from stockmachine.research.comparison import (
     slice_frame_by_windows,
     validate_aligned_frames,
 )
-from stockmachine.research.splitting import WalkForwardSplit, WalkForwardSplitConfig, build_walk_forward_splits
+from stockmachine.research.splitting import (
+    WalkForwardSplit,
+    WalkForwardSplitConfig,
+    build_latest_partial_walk_forward_split,
+    build_walk_forward_splits,
+)
 from stockmachine.research.universe import (
     DEFAULT_RESEARCH_UNIVERSE_NAME,
     build_point_in_time_metadata_history,
@@ -511,8 +516,15 @@ def build_research_frame(
     benchmark_symbol: str,
     horizon: int,
     symbol_metadata: pd.DataFrame | None = None,
+    drop_unlabeled_rows: bool = True,
 ) -> pd.DataFrame:
-    """Build panel features and next-open horizon labels."""
+    """Build panel features and next-open horizon labels.
+
+    By default the returned frame only includes rows with complete future labels,
+    which is what strict historical evaluation needs. Live or paper inference
+    can set ``drop_unlabeled_rows=False`` to keep the latest feature rows even
+    when their forward-return labels are not known yet.
+    """
 
     price_data = _ensure_adjusted_price_columns(price_data.copy())
     benchmark = (
@@ -569,7 +581,9 @@ def build_research_frame(
         panel["sector"] = "Unknown"
         panel["industry"] = "Unknown"
 
-    required_columns = list(FEATURE_COLUMNS) + ["future_return", "target"]
+    required_columns = list(FEATURE_COLUMNS)
+    if drop_unlabeled_rows:
+        required_columns += ["future_return", "target"]
     panel = panel.dropna(subset=required_columns).reset_index(drop=True)
     return panel
 
@@ -681,6 +695,7 @@ def generate_walk_forward_predictions(
     embargo_window_days: int | None = None,
     roll_frequency: str | None = None,
     include_validation_in_training: bool = True,
+    include_partial_current_test: bool = False,
 ) -> pd.DataFrame:
     """Generate walk-forward predictions using the shared P0 research protocol."""
 
@@ -696,9 +711,18 @@ def generate_walk_forward_predictions(
         roll_frequency=roll_frequency,
     )
     splits = build_walk_forward_splits(panel, config=split_config)
+    splits_to_process = list(splits)
+    if include_partial_current_test:
+        partial_split = build_latest_partial_walk_forward_split(
+            panel,
+            config=split_config,
+            fold_index=len(splits_to_process),
+        )
+        if partial_split is not None and all(split.anchor_date != partial_split.anchor_date for split in splits_to_process):
+            splits_to_process.append(partial_split)
 
     prediction_frames: list[pd.DataFrame] = []
-    for split in splits:
+    for split in splits_to_process:
         test_frame = split.test_frame.loc[split.test_frame["date"] >= predict_start_ts].copy()
         if test_frame.empty:
             continue
@@ -749,6 +773,10 @@ def generate_walk_forward_predictions(
                 "model",
                 "split_fold_index",
                 "split_anchor_date",
+                "split_train_start",
+                "split_train_end",
+                "split_validation_start",
+                "split_validation_end",
                 "split_test_start",
                 "split_test_end",
             ]
@@ -803,6 +831,10 @@ def _attach_split_metadata(frame: pd.DataFrame, split: WalkForwardSplit) -> pd.D
     tagged = frame.copy()
     tagged["split_fold_index"] = split.fold_index
     tagged["split_anchor_date"] = split.anchor_date
+    tagged["split_train_start"] = split.train_start
+    tagged["split_train_end"] = split.train_end
+    tagged["split_validation_start"] = split.validation_start
+    tagged["split_validation_end"] = split.validation_end
     tagged["split_test_start"] = split.test_start
     tagged["split_test_end"] = split.test_end
     return tagged

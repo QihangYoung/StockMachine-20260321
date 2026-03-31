@@ -8,6 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pandas as pd
+
 from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.apps.paper_profiles import load_strategy_profile
 from stockmachine.apps.run_us_equities_paper import (
@@ -16,6 +18,8 @@ from stockmachine.apps.run_us_equities_paper import (
     build_demo_runner,
     parse_session_date,
 )
+from stockmachine.data.loaders import load_us_equities_dataset
+from stockmachine.ingestion.jobs import collect_research_seed
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.monitoring.healthcheck import build_paper_daily_healthcheck
 from stockmachine.monitoring.digest import build_daily_summary_payload
@@ -59,6 +63,7 @@ class PaperDailyOperationPayload:
     command: str
     ok: bool
     summary: Mapping[str, Any]
+    silver_refresh: Mapping[str, Any] | None = None
     preflight: Mapping[str, Any] | None = None
     run: Mapping[str, Any] | None = None
     post_run: Mapping[str, Any] | None = None
@@ -70,6 +75,8 @@ class PaperDailyOperationPayload:
             "ok": self.ok,
             "summary": dict(self.summary),
         }
+        if self.silver_refresh is not None:
+            payload["silver_refresh"] = dict(self.silver_refresh)
         if self.preflight is not None:
             payload["preflight"] = dict(self.preflight)
         if self.run is not None:
@@ -114,6 +121,32 @@ def build_arg_parser(*, run_defaults: Mapping[str, Any] | None = None) -> argpar
     run_parser.add_argument("--kill-switch-path", default=str(DEFAULT_KILL_SWITCH_PATH))
     run_parser.add_argument("--artifact-root", default="artifacts")
     run_parser.add_argument("--artifact-dir", default=None, help="Optional research/backtest artifact dir for post-run reconciliation.")
+    run_parser.add_argument(
+        "--skip-silver-refresh",
+        action="store_true",
+        help="Skip the incremental silver refresh step before preflight and execution.",
+    )
+    run_parser.add_argument(
+        "--silver-refresh-feed",
+        default="iex",
+        help="Market-data feed used for incremental silver refresh.",
+    )
+    run_parser.add_argument(
+        "--silver-refresh-adjustment",
+        default="raw",
+        help="Adjustment mode used for incremental silver refresh.",
+    )
+    run_parser.add_argument(
+        "--silver-refresh-chunk-size",
+        type=int,
+        default=25,
+        help="Chunk size for the incremental silver refresh universe sync.",
+    )
+    run_parser.add_argument(
+        "--include-silver-symbol-master-refresh",
+        action="store_true",
+        help="Also refresh symbol_master during the incremental silver update.",
+    )
     if run_defaults:
         run_parser.set_defaults(**dict(run_defaults))
 
@@ -154,6 +187,35 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         session_date=session_date,
     )
     resolved_artifact_dir = str(artifact_link.artifact_dir) if artifact_link.artifact_dir is not None else None
+    silver_refresh_payload = maybe_refresh_silver_before_run(
+        session_date=session_date,
+        data_root=args.data_root,
+        demo_mode=getattr(args, "demo_mode", False),
+        skip_refresh=getattr(args, "skip_silver_refresh", False),
+        feed=getattr(args, "silver_refresh_feed", "iex"),
+        adjustment=getattr(args, "silver_refresh_adjustment", "raw"),
+        chunk_size=getattr(args, "silver_refresh_chunk_size", 25),
+        include_symbol_master=getattr(args, "include_silver_symbol_master_refresh", False),
+    )
+    if not bool(silver_refresh_payload.get("ok", False)):
+        payload = PaperDailyOperationPayload(
+            command="run",
+            ok=False,
+            summary={
+                "session_date": session_date.isoformat(),
+                "run_name": args.run_name,
+                "stage": "silver_refresh_failed",
+                "decision": "failed",
+                "report_status": None,
+            },
+            silver_refresh=silver_refresh_payload,
+            error={
+                "type": "SilverRefreshError",
+                "message": str(silver_refresh_payload.get("reason", "silver_refresh_failed")),
+            },
+        )
+        return payload.to_dict()
+
     preflight = build_paper_daily_preflight(
         session_date=session_date,
         ledger_path=args.ledger_path,
@@ -177,6 +239,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
                 override_allowed=args.allow_unhealthy,
                 stage="preflight_blocked",
             ),
+            silver_refresh=silver_refresh_payload,
             preflight=preflight.to_dict(),
         )
         return payload.to_dict()
@@ -240,6 +303,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
                 override_allowed=args.allow_unhealthy,
                 stage=str(report_payload.get("stage", "completed")),
             ),
+            silver_refresh=silver_refresh_payload,
             preflight=preflight.to_dict(),
             run={"report": report_payload},
             post_run=post_run_payload,
@@ -261,6 +325,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
                 override_allowed=args.allow_unhealthy,
                 stage="failed",
             ),
+            silver_refresh=silver_refresh_payload,
             preflight=preflight.to_dict(),
             error={
                 "type": type(exc).__name__,
@@ -316,6 +381,151 @@ def build_paper_daily_preflight(
     )
 
 
+def maybe_refresh_silver_before_run(
+    *,
+    session_date: date,
+    data_root: str | Path,
+    demo_mode: bool,
+    skip_refresh: bool,
+    feed: str,
+    adjustment: str,
+    chunk_size: int,
+    include_symbol_master: bool,
+) -> dict[str, Any]:
+    if demo_mode:
+        return {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "demo_mode",
+            "data_root": str(Path(data_root)),
+            "session_date": session_date.isoformat(),
+        }
+    if skip_refresh:
+        return {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "skip_requested",
+            "data_root": str(Path(data_root)),
+            "session_date": session_date.isoformat(),
+        }
+
+    storage = StorageLayout(root=Path(data_root))
+    latest_local_session = _latest_local_daily_bar_session_date(storage)
+    if latest_local_session is None:
+        return {
+            "ok": False,
+            "performed": False,
+            "skipped": True,
+            "reason": "missing_initial_silver_seed",
+            "data_root": str(storage.root),
+            "session_date": session_date.isoformat(),
+        }
+
+    expected_latest_session = _expected_latest_completed_session_date(session_date)
+    if latest_local_session >= expected_latest_session:
+        return {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "already_fresh_enough",
+            "data_root": str(storage.root),
+            "session_date": session_date.isoformat(),
+            "expected_latest_completed_session": expected_latest_session.isoformat(),
+            "latest_local_session_before_refresh": latest_local_session.isoformat(),
+        }
+
+    refresh_start = latest_local_session + pd.Timedelta(days=1)
+    refresh_end = expected_latest_session
+    try:
+        result = collect_research_seed(
+            start_date=refresh_start,
+            end_date=refresh_end,
+            layout=storage,
+            chunk_size=chunk_size,
+            feed=feed,
+            adjustment=adjustment,
+            include_symbol_master=include_symbol_master,
+            include_adj_factor=True,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "performed": True,
+            "skipped": False,
+            "reason": "collector_exception",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "data_root": str(storage.root),
+            "session_date": session_date.isoformat(),
+            "refresh_start_date": refresh_start.isoformat(),
+            "refresh_end_date": refresh_end.isoformat(),
+            "expected_latest_completed_session": expected_latest_session.isoformat(),
+            "latest_local_session_before_refresh": latest_local_session.isoformat(),
+        }
+
+    latest_after = _latest_local_daily_bar_session_date(storage)
+    if latest_after is None or latest_after < expected_latest_session:
+        return {
+            "ok": False,
+            "performed": True,
+            "skipped": False,
+            "reason": "refresh_left_silver_stale",
+            "data_root": str(storage.root),
+            "session_date": session_date.isoformat(),
+            "refresh_start_date": refresh_start.isoformat(),
+            "refresh_end_date": refresh_end.isoformat(),
+            "expected_latest_completed_session": expected_latest_session.isoformat(),
+            "latest_local_session_before_refresh": latest_local_session.isoformat(),
+            "latest_local_session_after_refresh": latest_after.isoformat() if latest_after is not None else None,
+            "collector": {
+                "feed": feed,
+                "adjustment": adjustment,
+                "chunk_size": chunk_size,
+                "include_symbol_master": include_symbol_master,
+                "include_adj_factor": True,
+            },
+            "result": result,
+        }
+    return {
+        "ok": True,
+        "performed": True,
+        "skipped": False,
+        "reason": "refresh_completed",
+        "data_root": str(storage.root),
+        "session_date": session_date.isoformat(),
+        "refresh_start_date": refresh_start.isoformat(),
+        "refresh_end_date": refresh_end.isoformat(),
+        "expected_latest_completed_session": expected_latest_session.isoformat(),
+        "latest_local_session_before_refresh": latest_local_session.isoformat(),
+        "latest_local_session_after_refresh": latest_after.isoformat() if latest_after is not None else None,
+        "collector": {
+            "feed": feed,
+            "adjustment": adjustment,
+            "chunk_size": chunk_size,
+            "include_symbol_master": include_symbol_master,
+            "include_adj_factor": True,
+        },
+        "result": result,
+    }
+
+
+def _latest_local_daily_bar_session_date(storage: StorageLayout) -> date | None:
+    dataset = load_us_equities_dataset(layout=storage)
+    daily_bar = dataset.get("daily_bar")
+    if daily_bar is None or daily_bar.empty:
+        return None
+    session_dates = pd.to_datetime(daily_bar["session_date"], errors="coerce").dropna()
+    if session_dates.empty:
+        return None
+    return session_dates.max().date()
+
+
+def _expected_latest_completed_session_date(session_date: date) -> date:
+    return (pd.Timestamp(session_date) - pd.offsets.BDay(1)).date()
+
+
 def summarize_paper_daily_result(
     *,
     session_date: date,
@@ -326,10 +536,15 @@ def summarize_paper_daily_result(
     stage: str,
 ) -> dict[str, Any]:
     report_status = None
+    report_meta: Mapping[str, Any] = {}
     if isinstance(report, Mapping):
         report_status = report.get("status")
+        report_meta = report.get("meta") if isinstance(report.get("meta"), Mapping) else {}
     elif report is not None:
         report_status = getattr(report, "status", None)
+        candidate_meta = getattr(report, "meta", None)
+        if isinstance(candidate_meta, Mapping):
+            report_meta = candidate_meta
     decision = "blocked_preflight"
     if report_status and report_status != "success":
         decision = "failed"
@@ -349,8 +564,10 @@ def summarize_paper_daily_result(
         "data_freshness_meta": dict(preflight.data_freshness_meta),
         "report_status": report_status,
     }
-
-
+    prediction_context = report_meta.get("prediction_context")
+    if isinstance(prediction_context, Mapping):
+        summary["prediction_context"] = dict(prediction_context)
+    return summary
 def _safe_build_post_run_payload(
     *,
     ledger_path: str | Path,

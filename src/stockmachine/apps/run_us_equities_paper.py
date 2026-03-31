@@ -276,11 +276,13 @@ class SilverWalkForwardSignalModel:
     dataset_cache: SilverDatasetCache
     model_name: str = "hist_gbm"
     horizon_bars: int = 5
+    last_prediction_context: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.model_name = assert_supported_alpha_expert(self.model_name)
 
     def predict(self, session_date: date, universe: Sequence[str]) -> Sequence[Signal]:
+        self.last_prediction_context = None
         dataset = self.dataset_cache.load()
         effective_date = self.dataset_cache.resolve_session_date(session_date)
 
@@ -295,12 +297,14 @@ class SilverWalkForwardSignalModel:
             benchmark_symbol=BENCHMARK_SYMBOL,
             horizon=self.horizon_bars,
             symbol_metadata=metadata,
+            drop_unlabeled_rows=False,
         )
         prediction_month_start = effective_date.replace(day=1).isoformat()
         predictions = generate_walk_forward_predictions(
             research_frame,
             predict_start=prediction_month_start,
             requested_models=(self.model_name,),
+            include_partial_current_test=True,
         )
         model_predictions = predictions[predictions["model"] == self.model_name].copy()
         if model_predictions.empty:
@@ -317,14 +321,17 @@ class SilverWalkForwardSignalModel:
             return []
 
         prediction_date = available_dates[-1]
-        current = model_predictions[
-            (model_predictions["date"].dt.date == prediction_date)
-            & (model_predictions["symbol"].isin(list(universe)))
-        ].copy()
+        prediction_slice = model_predictions[model_predictions["date"].dt.date == prediction_date].copy()
+        self.last_prediction_context = _build_prediction_context(
+            prediction_frame=prediction_slice,
+            prediction_date=prediction_date,
+        )
+        current = prediction_slice[prediction_slice["symbol"].isin(list(universe))].copy()
         if current.empty:
             return []
 
         timestamp = datetime.combine(prediction_date, time(16, 0))
+        prediction_context = self.last_prediction_context or {}
         return [
             Signal(
                 symbol=row.symbol,
@@ -341,10 +348,52 @@ class SilverWalkForwardSignalModel:
                     "vol_20": float(row.vol_20),
                     "median_dollar_volume_20": float(row.median_dollar_volume_20),
                     "reference_price": float(row.close),
+                    "training_window_start": prediction_context.get("training_window", {}).get("start"),
+                    "training_window_end": prediction_context.get("training_window", {}).get("end"),
+                    "validation_window_start": prediction_context.get("validation_window", {}).get("start"),
+                    "validation_window_end": prediction_context.get("validation_window", {}).get("end"),
+                    "prediction_window_start": prediction_context.get("prediction_window", {}).get("start"),
+                    "prediction_window_end": prediction_context.get("prediction_window", {}).get("end"),
                 },
             )
             for row in current.itertuples(index=False)
         ]
+
+
+def _build_prediction_context(
+    *,
+    prediction_frame: pd.DataFrame,
+    prediction_date: date,
+) -> dict[str, Any] | None:
+    if prediction_frame.empty:
+        return None
+    row = prediction_frame.iloc[0]
+    return {
+        "prediction_date": prediction_date.isoformat(),
+        "split_fold_index": int(row["split_fold_index"]) if "split_fold_index" in prediction_frame.columns and pd.notna(row.get("split_fold_index")) else None,
+        "split_anchor_date": _iso_date_or_none(row.get("split_anchor_date")),
+        "training_window": {
+            "start": _iso_date_or_none(row.get("split_train_start")),
+            "end": _iso_date_or_none(row.get("split_train_end")),
+        },
+        "validation_window": {
+            "start": _iso_date_or_none(row.get("split_validation_start")),
+            "end": _iso_date_or_none(row.get("split_validation_end")),
+        },
+        "prediction_window": {
+            "start": _iso_date_or_none(row.get("split_test_start")),
+            "end": _iso_date_or_none(row.get("split_test_end")),
+        },
+    }
+
+
+def _iso_date_or_none(value: object) -> str | None:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    timestamp = pd.to_datetime(value, errors="coerce")
+    if pd.isna(timestamp):
+        return None
+    return timestamp.date().isoformat()
 
 
 @dataclass(slots=True)
@@ -755,6 +804,19 @@ class PaperRunner:
 
             signals = list(self.dependencies.signal_model.predict(runtime_session_date, universe))
             counts["signals"] = len(signals)
+            prediction_context = self._prediction_context_from_signal_model(signals)
+            if prediction_context is not None:
+                meta["prediction_context"] = prediction_context
+                if manifest is not None:
+                    manifest = replace(
+                        manifest,
+                        meta={
+                            **dict(manifest.meta),
+                            "prediction_context": prediction_context,
+                        },
+                    )
+                    if ledger is not None:
+                        ledger.record_run_manifest(manifest.to_record())
             if ledger is not None:
                 for signal in signals:
                     ledger.append_signal(
@@ -1113,6 +1175,39 @@ class PaperRunner:
                 return ()
             return tuple(sorted(pd.to_datetime(daily_bar["session_date"]).dt.date.unique()))
         return None
+
+    def _prediction_context_from_signal_model(self, signals: Sequence[Signal]) -> dict[str, Any] | None:
+        signal_model_context = getattr(self.dependencies.signal_model, "last_prediction_context", None)
+        if isinstance(signal_model_context, Mapping) and signal_model_context:
+            return dict(signal_model_context)
+
+        if not signals:
+            return None
+        signal_meta = dict(getattr(signals[0], "meta", {}) or {})
+        prediction_date = signal_meta.get("prediction_date")
+        training_window_start = signal_meta.get("training_window_start")
+        training_window_end = signal_meta.get("training_window_end")
+        validation_window_start = signal_meta.get("validation_window_start")
+        validation_window_end = signal_meta.get("validation_window_end")
+        prediction_window_start = signal_meta.get("prediction_window_start")
+        prediction_window_end = signal_meta.get("prediction_window_end")
+        if prediction_date is None and prediction_window_start is None and prediction_window_end is None:
+            return None
+        return {
+            "prediction_date": prediction_date,
+            "training_window": {
+                "start": training_window_start,
+                "end": training_window_end,
+            },
+            "validation_window": {
+                "start": validation_window_start,
+                "end": validation_window_end,
+            },
+            "prediction_window": {
+                "start": prediction_window_start,
+                "end": prediction_window_end,
+            },
+        }
 
     def _guard_failures(self, guard_result) -> list[PaperRunFailure]:
         details = dict(guard_result.data_freshness_meta)
