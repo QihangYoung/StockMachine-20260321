@@ -18,14 +18,18 @@ from stockmachine.ingestion.storage import StorageLayout, write_jsonl
 from stockmachine.research.us_equities_baseline import BENCHMARK_SYMBOL, DEFAULT_UNIVERSE
 
 
-def collect_symbol_master_snapshot(layout: StorageLayout | None = None) -> dict[str, int]:
+def collect_symbol_master_snapshot(
+    layout: StorageLayout | None = None,
+    *,
+    snapshot_date: date | None = None,
+) -> dict[str, int]:
     """Collect and persist one symbol_master snapshot from Alpaca assets."""
 
     storage = layout or StorageLayout()
     run_id = _run_id()
     client = AlpacaHttpClient(AlpacaCredentials.from_env())
     collector = AlpacaAssetCollector(client)
-    normalizer = AlpacaAssetNormalizer()
+    normalizer = AlpacaAssetNormalizer(as_of_date=snapshot_date)
 
     raw_records = collector.collect(FetchWindow(stream_name="assets"))
     normalized_batches = normalizer.normalize(raw_records)
@@ -169,7 +173,7 @@ def collect_research_seed(
 
     symbol_result = {"raw_records": 0, "normalized_rows": 0}
     if include_symbol_master:
-        symbol_result = collect_symbol_master_snapshot(layout=storage)
+        symbol_result = collect_symbol_master_snapshot(layout=storage, snapshot_date=end_date)
     requested_symbols = list(dict.fromkeys([*DEFAULT_UNIVERSE, benchmark_symbol]))
 
     total_raw_records = symbol_result["raw_records"]

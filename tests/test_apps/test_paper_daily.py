@@ -38,6 +38,8 @@ def _make_run_args(**overrides) -> Namespace:
         "artifact_dir": None,
         "artifact_root": "artifacts",
         "strategy_profile": None,
+        "include_silver_symbol_master_refresh": None,
+        "skip_silver_symbol_master_refresh": False,
     }
     args.update(overrides)
     return Namespace(**args)
@@ -334,6 +336,123 @@ def test_maybe_refresh_silver_before_run_refreshes_to_latest_completed_session(m
     assert payload["reason"] == "refresh_completed"
     assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 21)
     assert observed["collector_kwargs"]["end_date"] == date(2026, 3, 23)
+
+
+def test_run_command_defaults_to_symbol_master_refresh(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def _refresh_stub(**kwargs):
+        observed["refresh_kwargs"] = kwargs
+        return {
+            "ok": True,
+            "performed": False,
+            "skipped": True,
+            "reason": "test_stub",
+        }
+
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        _refresh_stub,
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_paper_daily_preflight",
+        lambda **kwargs: paper_daily.PaperDailyPreflightResult(
+            policy_allowed=False,
+            allowed=False,
+            override_used=False,
+            reasons=("blocked_for_test",),
+            healthcheck={"healthy": True, "reasons": []},
+            session_guard=None,
+            kill_switch={"active": False, "path": "artifacts/paper_demo/paper_daily.kill", "reason": "absent", "payload": None},
+            effective_session_date=None,
+            data_freshness_meta={"resolution": "test"},
+        ),
+    )
+
+    payload = paper_daily.run_command(_make_run_args())
+
+    assert payload["ok"] is False
+    assert observed["refresh_kwargs"]["include_symbol_master"] is True
+
+
+def test_maybe_refresh_silver_before_run_refreshes_when_symbol_master_lags(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    daily_dates = iter([date(2026, 3, 23), date(2026, 3, 23)])
+    symbol_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_daily_bar_session_date",
+        lambda storage: next(daily_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_symbol_master_snapshot_date",
+        lambda storage: next(symbol_dates),
+    )
+
+    def _collect_research_seed(**kwargs):
+        observed["collector_kwargs"] = kwargs
+        return {"normalized_rows": 123}
+
+    monkeypatch.setattr(paper_daily, "collect_research_seed", _collect_research_seed)
+
+    payload = paper_daily.maybe_refresh_silver_before_run(
+        session_date=date(2026, 3, 24),
+        data_root="data",
+        demo_mode=False,
+        skip_refresh=False,
+        feed="iex",
+        adjustment="raw",
+        chunk_size=25,
+        include_symbol_master=True,
+    )
+
+    assert payload["ok"] is True
+    assert payload["reason"] == "refresh_completed"
+    assert payload["latest_symbol_master_snapshot_before_refresh"] == "2026-03-20"
+    assert payload["latest_symbol_master_snapshot_after_refresh"] == "2026-03-23"
+    assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 23)
+    assert observed["collector_kwargs"]["end_date"] == date(2026, 3, 23)
+
+
+def test_maybe_refresh_silver_before_run_fails_when_symbol_master_remains_stale(monkeypatch) -> None:
+    daily_dates = iter([date(2026, 3, 23), date(2026, 3, 23)])
+    symbol_dates = iter([date(2026, 3, 20), date(2026, 3, 20)])
+
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_daily_bar_session_date",
+        lambda storage: next(daily_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_symbol_master_snapshot_date",
+        lambda storage: next(symbol_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "collect_research_seed",
+        lambda **kwargs: {"normalized_rows": 0},
+    )
+
+    payload = paper_daily.maybe_refresh_silver_before_run(
+        session_date=date(2026, 3, 24),
+        data_root="data",
+        demo_mode=False,
+        skip_refresh=False,
+        feed="iex",
+        adjustment="raw",
+        chunk_size=25,
+        include_symbol_master=True,
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "refresh_left_symbol_master_stale"
+    assert payload["latest_local_session_after_refresh"] == "2026-03-23"
+    assert payload["latest_symbol_master_snapshot_after_refresh"] == "2026-03-20"
 
 
 def test_maybe_refresh_silver_before_run_fails_when_dataset_remains_stale(monkeypatch) -> None:

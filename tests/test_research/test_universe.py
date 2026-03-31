@@ -5,6 +5,7 @@ import json
 import pandas as pd
 
 from stockmachine.ingestion.storage import StorageLayout
+from stockmachine.research import universe as universe_module
 from stockmachine.research.universe import (
     build_point_in_time_metadata_history,
     load_point_in_time_universe,
@@ -379,3 +380,133 @@ def test_build_point_in_time_metadata_history_supports_exact_snapshot_fast_path(
     assert len(history) == 2
     assert list(history["date"]) == [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")]
     assert set(history["sector"]) == {"Technology"}
+
+
+def test_build_point_in_time_metadata_history_only_falls_back_for_missing_dates(monkeypatch) -> None:
+    symbol_master = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "AAPL",
+                "security_id": "AAPL",
+                "company_name": "Apple Day 2",
+                "exchange_mic": "XNAS",
+                "currency": "USD",
+                "security_type": "COMMON_STOCK",
+                "asset_class": "EQUITY",
+                "is_active": True,
+                "list_date": "2010-01-01",
+                "delist_date": None,
+                "sector": "Technology",
+                "industry": "Hardware",
+                "country_of_listing": "US",
+                "primary_share_class": True,
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-03",
+                "symbol": "AAPL",
+                "security_id": "AAPL",
+                "company_name": "Apple Day 3",
+                "exchange_mic": "XNAS",
+                "currency": "USD",
+                "security_type": "COMMON_STOCK",
+                "asset_class": "EQUITY",
+                "is_active": True,
+                "list_date": "2010-01-01",
+                "delist_date": None,
+                "sector": "Technology",
+                "industry": "Hardware",
+                "country_of_listing": "US",
+                "primary_share_class": True,
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-03T22:00:00+00:00",
+                "source_version": "v1",
+            },
+        ]
+    )
+    industry_membership = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "AAPL",
+                "industry_system": "gics",
+                "sector_name": "Technology",
+                "industry_group_name": "Technology",
+                "industry_name": "Hardware",
+                "subindustry_name": "Computers",
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-03",
+                "symbol": "AAPL",
+                "industry_system": "gics",
+                "sector_name": "Technology",
+                "industry_group_name": "Technology",
+                "industry_name": "Hardware",
+                "subindustry_name": "Computers",
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-03T22:00:00+00:00",
+                "source_version": "v1",
+            },
+        ]
+    )
+    universe_membership = pd.DataFrame(
+        [
+            {
+                "session_date": "2025-01-02",
+                "universe_name": "research_v1",
+                "symbol": "AAPL",
+                "is_member": True,
+                "membership_source": "historical_index_membership",
+                "entry_date": None,
+                "exit_date": None,
+                "source_name": "test_source",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "session_date": "2025-01-03",
+                "universe_name": "research_v1",
+                "symbol": "AAPL",
+                "is_member": True,
+                "membership_source": "historical_index_membership",
+                "entry_date": None,
+                "exit_date": None,
+                "source_name": "test_source",
+                "load_time_utc": "2025-01-03T22:00:00+00:00",
+                "source_version": "v1",
+            },
+        ]
+    )
+
+    original_resolve = universe_module.resolve_point_in_time_universe
+    resolved_dates: list[pd.Timestamp] = []
+
+    def _tracking_resolve(*args, **kwargs):
+        session_date = pd.Timestamp(args[0] if args else kwargs["session_date"]).normalize()
+        resolved_dates.append(session_date)
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(universe_module, "resolve_point_in_time_universe", _tracking_resolve)
+
+    history = build_point_in_time_metadata_history(
+        pd.Index([pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03"), pd.Timestamp("2025-01-06")]),
+        universe_membership_frame=universe_membership,
+        symbol_master_frame=symbol_master,
+        industry_membership_frame=industry_membership,
+        universe_name="research_v1",
+    )
+
+    assert resolved_dates == [pd.Timestamp("2025-01-06")]
+    assert list(history["date"].drop_duplicates()) == [
+        pd.Timestamp("2025-01-02"),
+        pd.Timestamp("2025-01-03"),
+        pd.Timestamp("2025-01-06"),
+    ]
+    jan6 = history.loc[history["date"] == pd.Timestamp("2025-01-06")].iloc[0]
+    assert jan6["company_name"] == "Apple Day 3"

@@ -259,31 +259,29 @@ def build_point_in_time_metadata_history(
 ) -> pd.DataFrame:
     """Build one date-aware metadata panel for research-frame joins."""
 
-    resolved_dates = (
-        pd.Series(list(session_dates), dtype="datetime64[ns]")
-        .dropna()
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
-    if not resolved_dates:
+    requested_dates = _normalize_requested_metadata_dates(session_dates)
+    if requested_dates.empty:
         return _empty_research_metadata_frame()
 
-    fast_path = _build_exact_snapshot_metadata_history(
-        resolved_dates,
+    fast_path, covered_dates = _build_partial_exact_snapshot_metadata_history(
+        requested_dates.tolist(),
         universe_membership_frame=universe_membership_frame,
         symbol_master_frame=symbol_master_frame,
         industry_membership_frame=industry_membership_frame,
         active_only=active_only,
         universe_name=universe_name,
     )
-    if fast_path is not None:
+    if len(covered_dates) == len(requested_dates):
         return fast_path
 
     frames: list[pd.DataFrame] = []
-    for session_date in resolved_dates:
-        snapshot = resolve_point_in_time_universe(
-            session_date,
+    if not fast_path.empty:
+        frames.append(fast_path)
+
+    missing_dates = requested_dates.difference(covered_dates)
+    if not missing_dates.empty:
+        carried_history = _build_carried_snapshot_metadata_history(
+            missing_dates.tolist(),
             universe_membership_frame=universe_membership_frame,
             symbol_master_frame=symbol_master_frame,
             industry_membership_frame=industry_membership_frame,
@@ -291,13 +289,12 @@ def build_point_in_time_metadata_history(
             require_snapshot=require_snapshot,
             universe_name=universe_name,
         )
-        if snapshot.metadata.empty:
-            continue
-        frames.append(_standardize_research_metadata(snapshot, session_date=pd.Timestamp(session_date)))
+        if not carried_history.empty:
+            frames.append(carried_history)
 
     if not frames:
         return _empty_research_metadata_frame()
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True).sort_values(["date", "symbol"]).reset_index(drop=True)
 
 
 def load_universe_members(
@@ -536,7 +533,19 @@ def _empty_research_metadata_frame() -> pd.DataFrame:
     )
 
 
-def _build_exact_snapshot_metadata_history(
+def _normalize_requested_metadata_dates(
+    session_dates: pd.Series | pd.Index | tuple[pd.Timestamp, ...] | list[pd.Timestamp],
+) -> pd.Index:
+    return pd.Index(
+        pd.Series(list(session_dates), dtype="datetime64[ns]")
+        .dropna()
+        .drop_duplicates()
+        .sort_values()
+        .dt.normalize()
+    )
+
+
+def _build_partial_exact_snapshot_metadata_history(
     session_dates: list[pd.Timestamp],
     *,
     universe_membership_frame: pd.DataFrame | None,
@@ -544,23 +553,34 @@ def _build_exact_snapshot_metadata_history(
     industry_membership_frame: pd.DataFrame,
     active_only: bool,
     universe_name: str | None,
-) -> pd.DataFrame | None:
+) -> tuple[pd.DataFrame, pd.Index]:
     if symbol_master_frame.empty:
-        return None
+        return _empty_research_metadata_frame(), pd.Index([], dtype="datetime64[ns]")
 
     symbol_master = symbol_master_frame.copy()
     symbol_master["as_of_date"] = pd.to_datetime(symbol_master["as_of_date"], errors="coerce").dt.normalize()
     symbol_master = symbol_master.dropna(subset=["as_of_date"]).copy()
-    requested_dates = pd.Index(pd.to_datetime(session_dates).normalize())
-    available_symbol_dates = pd.Index(symbol_master["as_of_date"].drop_duplicates().sort_values())
-    if not requested_dates.isin(available_symbol_dates).all():
-        return None
+    requested_dates = _normalize_requested_metadata_dates(session_dates)
+    covered_dates = requested_dates.intersection(_available_snapshot_dates(symbol_master, date_column="as_of_date"))
 
-    symbol_master = symbol_master.loc[symbol_master["as_of_date"].isin(requested_dates)].copy()
+    if universe_membership_frame is not None and not universe_membership_frame.empty:
+        covered_dates = covered_dates.intersection(
+            _available_snapshot_dates(universe_membership_frame, date_column="session_date")
+        )
+
+    if not industry_membership_frame.empty:
+        covered_dates = covered_dates.intersection(
+            _available_snapshot_dates(industry_membership_frame, date_column="as_of_date")
+        )
+
+    if covered_dates.empty:
+        return _empty_research_metadata_frame(), covered_dates
+
+    symbol_master = symbol_master.loc[symbol_master["as_of_date"].isin(covered_dates)].copy()
     if active_only and "is_active" in symbol_master.columns:
         symbol_master = symbol_master.loc[symbol_master["is_active"].fillna(False).astype(bool)].copy()
     if symbol_master.empty:
-        return _empty_research_metadata_frame()
+        return _empty_research_metadata_frame(), covered_dates
 
     standardized = symbol_master.rename(
         columns={
@@ -593,7 +613,7 @@ def _build_exact_snapshot_metadata_history(
                 membership["entry_date"] = pd.to_datetime(membership["entry_date"], errors="coerce")
             if "exit_date" in membership.columns:
                 membership["exit_date"] = pd.to_datetime(membership["exit_date"], errors="coerce")
-            membership = membership.loc[membership["session_date"].isin(requested_dates)].copy()
+            membership = membership.loc[membership["session_date"].isin(covered_dates)].copy()
             if not membership.empty:
                 standardized = standardized.merge(
                     membership[["session_date", "symbol"]].rename(columns={"session_date": "date"}),
@@ -605,7 +625,7 @@ def _build_exact_snapshot_metadata_history(
         industry_map = industry_membership_frame.copy()
         industry_map["as_of_date"] = pd.to_datetime(industry_map["as_of_date"], errors="coerce").dt.normalize()
         industry_map = industry_map.dropna(subset=["as_of_date"]).copy()
-        industry_map = industry_map.loc[industry_map["as_of_date"].isin(requested_dates)].copy()
+        industry_map = industry_map.loc[industry_map["as_of_date"].isin(covered_dates)].copy()
         if not industry_map.empty:
             sort_columns = [column for column in ("symbol", "as_of_date", "industry_system", "load_time_utc") if column in industry_map.columns]
             if sort_columns:
@@ -632,7 +652,46 @@ def _build_exact_snapshot_metadata_history(
     standardized = standardized[
         ["date", "symbol", "company_name", "quote_type", "exchange", "currency", "country", "sector", "industry"]
     ]
-    return standardized.sort_values(["date", "symbol"]).reset_index(drop=True)
+    return standardized.sort_values(["date", "symbol"]).reset_index(drop=True), covered_dates
+
+
+def _build_carried_snapshot_metadata_history(
+    session_dates: list[pd.Timestamp],
+    *,
+    universe_membership_frame: pd.DataFrame | None,
+    symbol_master_frame: pd.DataFrame,
+    industry_membership_frame: pd.DataFrame,
+    active_only: bool,
+    require_snapshot: bool,
+    universe_name: str | None,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for session_date in session_dates:
+        snapshot = resolve_point_in_time_universe(
+            session_date,
+            universe_membership_frame=universe_membership_frame,
+            symbol_master_frame=symbol_master_frame,
+            industry_membership_frame=industry_membership_frame,
+            active_only=active_only,
+            require_snapshot=require_snapshot,
+            universe_name=universe_name,
+        )
+        if snapshot.metadata.empty:
+            continue
+        frames.append(_standardize_research_metadata(snapshot, session_date=pd.Timestamp(session_date)))
+
+    if not frames:
+        return _empty_research_metadata_frame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _available_snapshot_dates(frame: pd.DataFrame, *, date_column: str) -> pd.Index:
+    if frame.empty or date_column not in frame.columns:
+        return pd.Index([], dtype="datetime64[ns]")
+    snapshot_dates = pd.to_datetime(frame[date_column], errors="coerce")
+    if isinstance(snapshot_dates, pd.Series):
+        snapshot_dates = snapshot_dates.dt.normalize()
+    return pd.Index(snapshot_dates.dropna().drop_duplicates().sort_values())
 
 
 def _placeholder_metadata_from_membership(frame: pd.DataFrame, *, session_date: pd.Timestamp) -> pd.DataFrame:

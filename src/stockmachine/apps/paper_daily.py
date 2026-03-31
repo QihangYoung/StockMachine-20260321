@@ -18,7 +18,7 @@ from stockmachine.apps.run_us_equities_paper import (
     build_demo_runner,
     parse_session_date,
 )
-from stockmachine.data.loaders import load_us_equities_dataset
+from stockmachine.data.loaders.silver import load_silver_table
 from stockmachine.ingestion.jobs import collect_research_seed
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.monitoring.healthcheck import build_paper_daily_healthcheck
@@ -145,7 +145,13 @@ def build_arg_parser(*, run_defaults: Mapping[str, Any] | None = None) -> argpar
     run_parser.add_argument(
         "--include-silver-symbol-master-refresh",
         action="store_true",
-        help="Also refresh symbol_master during the incremental silver update.",
+        default=None,
+        help="Legacy alias for explicitly enabling symbol_master refresh during the incremental silver update.",
+    )
+    run_parser.add_argument(
+        "--skip-silver-symbol-master-refresh",
+        action="store_true",
+        help="Skip symbol_master refresh during the incremental silver update (default is to refresh it).",
     )
     if run_defaults:
         run_parser.set_defaults(**dict(run_defaults))
@@ -195,7 +201,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         feed=getattr(args, "silver_refresh_feed", "iex"),
         adjustment=getattr(args, "silver_refresh_adjustment", "raw"),
         chunk_size=getattr(args, "silver_refresh_chunk_size", 25),
-        include_symbol_master=getattr(args, "include_silver_symbol_master_refresh", False),
+        include_symbol_master=_include_symbol_master_refresh_requested(args),
     )
     if not bool(silver_refresh_payload.get("ok", False)):
         payload = PaperDailyOperationPayload(
@@ -413,6 +419,7 @@ def maybe_refresh_silver_before_run(
 
     storage = StorageLayout(root=Path(data_root))
     latest_local_session = _latest_local_daily_bar_session_date(storage)
+    latest_symbol_master_snapshot = _latest_local_symbol_master_snapshot_date(storage) if include_symbol_master else None
     if latest_local_session is None:
         return {
             "ok": False,
@@ -424,7 +431,12 @@ def maybe_refresh_silver_before_run(
         }
 
     expected_latest_session = _expected_latest_completed_session_date(session_date)
-    if latest_local_session >= expected_latest_session:
+    if _silver_refresh_targets_met(
+        latest_local_session=latest_local_session,
+        latest_symbol_master_snapshot=latest_symbol_master_snapshot,
+        expected_latest_session=expected_latest_session,
+        include_symbol_master=include_symbol_master,
+    ):
         return {
             "ok": True,
             "performed": False,
@@ -434,9 +446,12 @@ def maybe_refresh_silver_before_run(
             "session_date": session_date.isoformat(),
             "expected_latest_completed_session": expected_latest_session.isoformat(),
             "latest_local_session_before_refresh": latest_local_session.isoformat(),
+            "latest_symbol_master_snapshot_before_refresh": (
+                latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
+            ),
         }
 
-    refresh_start = latest_local_session + pd.Timedelta(days=1)
+    refresh_start = min(latest_local_session + pd.Timedelta(days=1), expected_latest_session)
     refresh_end = expected_latest_session
     try:
         result = collect_research_seed(
@@ -463,15 +478,27 @@ def maybe_refresh_silver_before_run(
             "refresh_end_date": refresh_end.isoformat(),
             "expected_latest_completed_session": expected_latest_session.isoformat(),
             "latest_local_session_before_refresh": latest_local_session.isoformat(),
+            "latest_symbol_master_snapshot_before_refresh": (
+                latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
+            ),
         }
 
     latest_after = _latest_local_daily_bar_session_date(storage)
-    if latest_after is None or latest_after < expected_latest_session:
+    latest_symbol_master_after = _latest_local_symbol_master_snapshot_date(storage) if include_symbol_master else None
+    if not _silver_refresh_targets_met(
+        latest_local_session=latest_after,
+        latest_symbol_master_snapshot=latest_symbol_master_after,
+        expected_latest_session=expected_latest_session,
+        include_symbol_master=include_symbol_master,
+    ):
+        stale_reason = "refresh_left_silver_stale"
+        if latest_after is not None and latest_after >= expected_latest_session and include_symbol_master:
+            stale_reason = "refresh_left_symbol_master_stale"
         return {
             "ok": False,
             "performed": True,
             "skipped": False,
-            "reason": "refresh_left_silver_stale",
+            "reason": stale_reason,
             "data_root": str(storage.root),
             "session_date": session_date.isoformat(),
             "refresh_start_date": refresh_start.isoformat(),
@@ -479,6 +506,12 @@ def maybe_refresh_silver_before_run(
             "expected_latest_completed_session": expected_latest_session.isoformat(),
             "latest_local_session_before_refresh": latest_local_session.isoformat(),
             "latest_local_session_after_refresh": latest_after.isoformat() if latest_after is not None else None,
+            "latest_symbol_master_snapshot_before_refresh": (
+                latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
+            ),
+            "latest_symbol_master_snapshot_after_refresh": (
+                latest_symbol_master_after.isoformat() if latest_symbol_master_after is not None else None
+            ),
             "collector": {
                 "feed": feed,
                 "adjustment": adjustment,
@@ -500,6 +533,12 @@ def maybe_refresh_silver_before_run(
         "expected_latest_completed_session": expected_latest_session.isoformat(),
         "latest_local_session_before_refresh": latest_local_session.isoformat(),
         "latest_local_session_after_refresh": latest_after.isoformat() if latest_after is not None else None,
+        "latest_symbol_master_snapshot_before_refresh": (
+            latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
+        ),
+        "latest_symbol_master_snapshot_after_refresh": (
+            latest_symbol_master_after.isoformat() if latest_symbol_master_after is not None else None
+        ),
         "collector": {
             "feed": feed,
             "adjustment": adjustment,
@@ -511,12 +550,49 @@ def maybe_refresh_silver_before_run(
     }
 
 
+def _include_symbol_master_refresh_requested(args: argparse.Namespace) -> bool:
+    if bool(getattr(args, "skip_silver_symbol_master_refresh", False)):
+        return False
+    explicit_include = getattr(args, "include_silver_symbol_master_refresh", None)
+    if explicit_include is not None:
+        return bool(explicit_include)
+    return True
+
+
+def _silver_refresh_targets_met(
+    *,
+    latest_local_session: date | None,
+    latest_symbol_master_snapshot: date | None,
+    expected_latest_session: date,
+    include_symbol_master: bool,
+) -> bool:
+    if latest_local_session is None or latest_local_session < expected_latest_session:
+        return False
+    if include_symbol_master and (
+        latest_symbol_master_snapshot is None or latest_symbol_master_snapshot < expected_latest_session
+    ):
+        return False
+    return True
+
+
 def _latest_local_daily_bar_session_date(storage: StorageLayout) -> date | None:
-    dataset = load_us_equities_dataset(layout=storage)
-    daily_bar = dataset.get("daily_bar")
-    if daily_bar is None or daily_bar.empty:
+    return _latest_local_table_date(storage, table_name="daily_bar", date_column="session_date")
+
+
+def _latest_local_symbol_master_snapshot_date(storage: StorageLayout) -> date | None:
+    return _latest_local_table_date(storage, table_name="symbol_master", date_column="as_of_date")
+
+
+def _latest_local_table_date(
+    storage: StorageLayout,
+    *,
+    table_name: str,
+    date_column: str,
+) -> date | None:
+    table = load_silver_table(table_name, layout=storage)
+    if table.empty or date_column not in table.columns:
         return None
-    session_dates = pd.to_datetime(daily_bar["session_date"], errors="coerce").dropna()
+    session_dates = pd.to_datetime(table[date_column], errors="coerce").dropna()
     if session_dates.empty:
         return None
     return session_dates.max().date()

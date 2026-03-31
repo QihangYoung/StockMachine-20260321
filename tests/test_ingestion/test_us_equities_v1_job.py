@@ -6,8 +6,10 @@ from stockmachine.ingestion.jobs import us_equities_v1
 def test_collect_research_seed_chunks_default_universe(monkeypatch) -> None:
     calls = []
     adj_calls = []
+    symbol_master_calls = []
 
-    def fake_symbol_master(*, layout=None):
+    def fake_symbol_master(*, layout=None, snapshot_date=None):
+        symbol_master_calls.append({"layout": layout, "snapshot_date": snapshot_date})
         return {"raw_records": 10, "normalized_rows": 10}
 
     def fake_daily_bars(symbols, **kwargs):
@@ -39,4 +41,6 @@ def test_collect_research_seed_chunks_default_universe(monkeypatch) -> None:
     assert sum(len(call) for call in calls) == expected_symbols
     assert sum(len(call) for call in adj_calls) == expected_symbols
     assert calls[-1][-1] == us_equities_v1.BENCHMARK_SYMBOL
+    assert len(symbol_master_calls) == 1
+    assert symbol_master_calls[0]["snapshot_date"] == date(2025, 1, 31)
     assert result["included_adj_factor"] == 1
