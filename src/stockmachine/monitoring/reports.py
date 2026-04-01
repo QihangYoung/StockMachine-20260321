@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.state.models import RunManifestRecord
 
 
@@ -107,6 +108,7 @@ class PaperArtifactLink:
     exists: bool
     files: Mapping[str, str] = field(default_factory=dict)
     candidates: tuple[str, ...] = ()
+    search_roots: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -116,6 +118,7 @@ class PaperArtifactLink:
             "exists": self.exists,
             "files": dict(self.files),
             "candidates": list(self.candidates),
+            "search_roots": list(self.search_roots),
             "notes": list(self.notes),
         }
 
@@ -189,17 +192,19 @@ def build_paper_artifact_link(
     run_name: str | None = None,
     session_date: date | None = None,
     model_name: str | None = None,
+    strategy_project: str | None = None,
 ) -> PaperArtifactLink:
     """Resolve a likely artifact directory for paper operator workflows."""
 
     manifest_payload = _manifest_payload(manifest)
-    resolved, source, candidates, notes = _resolve_artifact_dir(
+    resolved, source, candidates, search_roots, notes = _resolve_artifact_dir(
         explicit_artifact_dir=artifact_dir,
         artifact_root=artifact_root,
         manifest_payload=manifest_payload,
         run_name=run_name,
         session_date=session_date,
         model_name=model_name,
+        strategy_project=strategy_project,
     )
     files = {}
     if resolved is not None:
@@ -214,6 +219,7 @@ def build_paper_artifact_link(
         exists=resolved.exists() if resolved is not None else False,
         files=files,
         candidates=candidates,
+        search_roots=search_roots,
         notes=notes,
     )
 
@@ -223,6 +229,8 @@ def _manifest_payload(manifest: PaperRunManifest | Mapping[str, Any] | None) -> 
         return {}
     if isinstance(manifest, PaperRunManifest):
         return manifest.to_dict()
+    if is_dataclass(manifest):
+        return dict(asdict(manifest))
     return dict(manifest)
 
 
@@ -234,10 +242,11 @@ def _resolve_artifact_dir(
     run_name: str | None,
     session_date: date | None,
     model_name: str | None,
-) -> tuple[Path | None, str, tuple[str, ...], tuple[str, ...]]:
+    strategy_project: str | None,
+) -> tuple[Path | None, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     if explicit_artifact_dir is not None:
         resolved = Path(explicit_artifact_dir)
-        return resolved, "explicit", (str(resolved),), ()
+        return resolved, "explicit", (str(resolved),), (str(resolved.parent),), ()
 
     meta = dict(manifest_payload.get("meta") or {})
     manifest_candidate = (
@@ -248,24 +257,33 @@ def _resolve_artifact_dir(
     )
     if manifest_candidate is not None:
         resolved = Path(str(manifest_candidate))
-        return resolved, "manifest_meta", (str(resolved),), ()
+        return resolved, "manifest_meta", (str(resolved),), (str(resolved.parent),), ()
 
     root = Path(artifact_root)
-    if not root.exists():
-        return None, "unresolved", (), ("artifact_root_missing",)
+    search_roots = _artifact_search_roots(root, strategy_project=strategy_project)
+    search_root_strings = tuple(str(candidate) for candidate in search_roots)
+    if not any(candidate.exists() for candidate in search_roots):
+        return None, "unresolved", (), search_root_strings, ("artifact_root_missing",)
 
-    candidates = _discover_artifact_candidates(root)
+    candidates = _discover_artifact_candidates(search_roots)
     candidate_strings = tuple(str(candidate) for candidate in candidates)
     if not candidates:
-        return None, "unresolved", candidate_strings, ("artifact_root_has_no_candidates",)
+        return None, "unresolved", candidate_strings, search_root_strings, ("artifact_root_has_no_candidates",)
 
     requested_date = session_date.isoformat() if session_date is not None else None
+    project_research_root = None
+    if strategy_project not in (None, ""):
+        project_research_root = build_strategy_project_paths(str(strategy_project), artifact_root=root).research_root
     scored_candidates: list[tuple[int, int, Path, tuple[str, ...]]] = []
     for candidate in candidates:
         candidate_text = str(candidate).lower()
         candidate_name = candidate.name.lower()
         notes: list[str] = []
         score = 0
+
+        if project_research_root is not None and _path_is_within(candidate, project_research_root):
+            score += 5
+            notes.append("matched_strategy_project_root")
 
         if run_name:
             if run_name.lower() in candidate_text or run_name.lower() in candidate_name:
@@ -291,19 +309,46 @@ def _resolve_artifact_dir(
     scored_candidates.sort(key=lambda item: (item[0], item[1], str(item[2])), reverse=True)
     best_score, _, best_candidate, best_notes = scored_candidates[0]
     if best_score <= 0 and (run_name or model_name or requested_date):
-        return None, "unresolved", candidate_strings, ("no_direct_match_found",)
+        return None, "unresolved", candidate_strings, search_root_strings, ("no_direct_match_found",)
 
-    return best_candidate, "discovered", candidate_strings, best_notes
+    return best_candidate, "discovered", candidate_strings, search_root_strings, best_notes
 
 
-def _discover_artifact_candidates(root: Path) -> list[Path]:
+def _artifact_search_roots(root: Path, *, strategy_project: str | None) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    if strategy_project not in (None, ""):
+        roots.append(build_strategy_project_paths(str(strategy_project), artifact_root=root).research_root)
+    roots.append(root)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in roots:
+        normalized = str(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(candidate)
+    return tuple(unique)
+
+
+def _discover_artifact_candidates(roots: tuple[Path, ...] | list[Path]) -> list[Path]:
     required_files = ("backtest_summary.csv", "backtest_records.csv", "predictions.csv")
     candidates: list[Path] = []
-    for summary_file in root.rglob("backtest_summary.csv"):
-        parent = summary_file.parent
-        if all((parent / file_name).exists() for file_name in required_files):
-            candidates.append(parent)
+    for root in roots:
+        if not root.exists():
+            continue
+        for summary_file in root.rglob("backtest_summary.csv"):
+            parent = summary_file.parent
+            if all((parent / file_name).exists() for file_name in required_files):
+                candidates.append(parent)
     return sorted(set(candidates), key=lambda path: (_artifact_mtime(path), str(path)), reverse=True)
+
+
+def _path_is_within(candidate: Path, ancestor: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(ancestor.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _artifact_mtime(path: Path) -> float:

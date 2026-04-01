@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from stockmachine.apps import paper_daily
 from stockmachine.apps.run_us_equities_paper import PaperRunConfig
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.monitoring.reports import PaperRunFailure, build_paper_run_report
 
 
@@ -38,6 +39,10 @@ def _make_run_args(**overrides) -> Namespace:
         "artifact_dir": None,
         "artifact_root": "artifacts",
         "strategy_profile": None,
+        "strategy_family": None,
+        "strategy_project": None,
+        "strategy_horizon_bucket": None,
+        "strategy_track": None,
         "include_silver_symbol_master_refresh": None,
         "skip_silver_symbol_master_refresh": False,
     }
@@ -108,6 +113,80 @@ def test_run_command_happy_path_uses_builder_and_runner(monkeypatch) -> None:
     assert calls["builder_kwargs"]["ledger_path"] == "artifacts/paper_demo/paper_ledger.sqlite3"
     assert calls["config"].run_name == "daily-smoke"
     assert calls["config"].dry_run is True
+    assert calls["closed"] is True
+
+
+def test_run_command_carries_strategy_lineage_into_config_and_summary(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class _Runner:
+        def run(self, config):
+            calls["config"] = config
+            return build_paper_run_report(
+                session_date=config.session_date,
+                dry_run=config.dry_run,
+                stage="completed",
+                counts={"signals": 1, "targets": 1, "orders": 1},
+                run_id="run-lineage",
+                meta={"source": "test"},
+            )
+
+        def close(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        paper_daily,
+        "build_alpaca_paper_runner",
+        lambda **kwargs: (_Runner(), PaperRunConfig(session_date=date(2026, 3, 22), dry_run=True, universe=("AAPL",))),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_paper_daily_preflight",
+        lambda **kwargs: paper_daily.PaperDailyPreflightResult(
+            policy_allowed=True,
+            allowed=True,
+            override_used=False,
+            reasons=(),
+            healthcheck={"healthy": True, "reasons": []},
+            session_guard=None,
+            kill_switch={"active": False, "path": "artifacts/paper_demo/paper_daily.kill", "reason": "absent", "payload": None},
+            effective_session_date=date(2026, 3, 22),
+            data_freshness_meta={"resolution": "exact"},
+        ),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_safe_build_post_run_payload",
+        lambda **kwargs: {"ok": True, "reconciliation": {"run_id": kwargs["run_id"]}},
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "maybe_refresh_silver_before_run",
+        lambda **kwargs: {"ok": True, "performed": False, "skipped": True, "reason": "test_stub"},
+    )
+
+    payload = paper_daily.run_command(
+        _make_run_args(
+            strategy_profile="us_extra_trees_daily",
+            strategy_family="us_equities",
+            strategy_project="us_equities_h5",
+            strategy_horizon_bucket="h5",
+            strategy_track="swing_rebalance",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert calls["config"].strategy_profile == "us_extra_trees_daily"
+    assert calls["config"].strategy_project == "us_equities_h5"
+    assert payload["summary"]["strategy_profile"] == "us_extra_trees_daily"
+    assert payload["summary"]["strategy_lineage"] == {
+        "strategy_family": "us_equities",
+        "strategy_project": "us_equities_h5",
+        "strategy_horizon_bucket": "h5",
+        "strategy_track": "swing_rebalance",
+    }
+    workspace = build_strategy_project_paths("us_equities_h5")
+    assert payload["summary"]["strategy_workspace"]["ledger_path"] == str(workspace.ledger_path)
     assert calls["closed"] is True
 
 
@@ -523,6 +602,12 @@ def test_parse_args_applies_strategy_profile_defaults_and_allows_cli_override() 
     assert args.model == "hist_gbm"
     assert args.top_k == 3
     assert args.horizon == 5
+    assert args.strategy_project == "us_equities_h5"
+    assert args.strategy_horizon_bucket == "h5"
+    assert args.strategy_track == "swing_rebalance"
+    workspace = build_strategy_project_paths("us_equities_h5")
+    assert args.ledger_path == str(workspace.ledger_path)
+    assert args.kill_switch_path == str(workspace.kill_switch_path)
 
 
 def test_parse_args_reads_sys_argv_when_not_explicit(monkeypatch) -> None:
@@ -592,3 +677,18 @@ def test_parse_args_supports_extra_trees_strategy_profile() -> None:
     assert args.strategy_profile == "us_extra_trees_daily"
     assert args.model == "extra_trees"
     assert args.run_name == "us-extra-trees-daily"
+
+
+def test_parse_args_supports_nested_strategy_profile_paths() -> None:
+    args = paper_daily.parse_args(
+        [
+            "run",
+            "--strategy-profile",
+            "h5/us_extra_trees_daily",
+        ]
+    )
+
+    assert args.strategy_profile == "h5/us_extra_trees_daily"
+    assert args.model == "extra_trees"
+    assert args.run_name == "us-extra-trees-daily"
+    assert args.strategy_project == "us_equities_h5"

@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 
 from stockmachine.apps.paper_maintain import main
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.monitoring.reports import build_paper_run_manifest
 from stockmachine.state import LocalLedger, OrderRecord
 
@@ -120,3 +121,57 @@ def test_paper_maintain_cli_outputs_json_plan(tmp_path, capsys) -> None:
     assert output["plan"]["recovery_plan"]["orphan_count"] == 1
     assert output["plan"]["recovery_plan"]["stale_count"] == 1
 
+
+def test_paper_maintain_strategy_project_resolves_default_ledger(tmp_path, capsys) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = build_strategy_project_paths("us_equities_h5", artifact_root=artifact_root)
+    workspace.paper_root.mkdir(parents=True, exist_ok=True)
+    ledger = LocalLedger(workspace.ledger_path)
+    ledger.initialize()
+    ledger.record_run_manifest(
+        build_paper_run_manifest(
+            run_id="run-maint",
+            session_date=date(2026, 3, 22),
+            strategy_name="demo",
+            model_name="hist_gbm",
+            dry_run=False,
+        ).to_record()
+    )
+    ledger.upsert_order(
+        OrderRecord(
+            order_id="order-aapl",
+            run_id="run-maint",
+            session_date=date(2026, 3, 22),
+            client_order_id="client-aapl",
+            symbol="AAPL",
+            side="buy",
+            quantity=10,
+            order_type="market",
+            limit_price=None,
+            status="submitted",
+            filled_quantity=0,
+            avg_fill_price=None,
+            submitted_at_utc=datetime(2026, 3, 22, 13, 50, tzinfo=timezone.utc),
+            updated_at_utc=datetime(2026, 3, 22, 13, 50, tzinfo=timezone.utc),
+            broker_payload={},
+        )
+    )
+    ledger.close()
+    broker_orders_path = tmp_path / "broker_orders.json"
+    pd.DataFrame([]).to_json(broker_orders_path, orient="records")
+
+    exit_code = main(
+        [
+            "--strategy-project",
+            "us_equities_h5",
+            "--artifact-root",
+            str(artifact_root),
+            "latest-run",
+            "--broker-orders-json",
+            str(broker_orders_path),
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["strategy_workspace"]["ledger_path"] == str(workspace.ledger_path)

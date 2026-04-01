@@ -7,6 +7,11 @@ from typing import Sequence
 
 import pandas as pd
 
+from stockmachine.apps.research_paths import (
+    resolve_research_cache_dir,
+    resolve_research_output_root,
+    resolve_research_workspace,
+)
 from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.research.p1_rigor import (
     build_cost_stress_summary,
@@ -28,14 +33,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--top-k-grid", nargs="*", type=int, default=(5, 10, 15, 20))
     parser.add_argument("--cost-bps-levels", nargs="*", type=float, default=(10.0, 20.0, 40.0, 60.0))
-    parser.add_argument("--output-root", default="artifacts/p1_rigor_suite")
+    parser.add_argument("--output-root", default=None)
+    parser.add_argument("--strategy-project", default=None)
+    parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--min-close", type=float, default=10.0)
     parser.add_argument("--min-median-dollar-volume-20", type=float, default=50_000_000.0)
     parser.add_argument("--max-vol-20", type=float, default=0.04)
     parser.add_argument("--max-positions-per-sector", type=int, default=2)
     parser.add_argument("--cost-bps-per-side", type=float, default=10.0)
     parser.add_argument("--disable-sector-neutral", action="store_true")
-    parser.add_argument("--cache-dir", default="artifacts/cache/p1_rigor_suite")
+    parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--disable-cache", action="store_true")
     parser.add_argument("--rebuild-cache", action="store_true")
     return parser
@@ -44,7 +51,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    output_root = Path(args.output_root)
+    workspace = resolve_research_workspace(
+        strategy_project=getattr(args, "strategy_project", None),
+        horizon=args.horizon,
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    output_root = resolve_research_output_root(
+        output_root=getattr(args, "output_root", None),
+        default_dirname="p1_rigor_suite",
+        strategy_project=getattr(args, "strategy_project", None),
+        horizon=args.horizon,
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    cache_dir = resolve_research_cache_dir(
+        cache_dir=getattr(args, "cache_dir", None),
+        default_dirname="p1_rigor_suite",
+        strategy_project=getattr(args, "strategy_project", None),
+        horizon=args.horizon,
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
     output_root.mkdir(parents=True, exist_ok=True)
 
     overlay_config = OverlayConfig(
@@ -59,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     bundle = build_strict_research_bundle(
         predict_start=args.predict_start,
         horizon=args.horizon,
-        cache_dir=None if args.disable_cache else args.cache_dir,
+        cache_dir=None if args.disable_cache else cache_dir,
         reuse_cache=not args.disable_cache,
         rebuild_cache=bool(args.rebuild_cache),
     )
@@ -132,6 +157,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ok": bool(strict_payload.get("ok", False)),
         "predict_start": args.predict_start,
         "horizon": args.horizon,
+        "strategy_project": workspace.project_id,
+        "strategy_workspace": workspace.to_dict(),
+        "output_root": str(output_root),
         "strict_summary_path": str(strict_root / "summary_metrics.csv"),
         "analysis_models": analysis_models,
         "stability_yearly_path": str(stability_root / "yearly_summary.csv"),
@@ -145,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "cache": {
             "enabled": not args.disable_cache,
-            "cache_dir": None if args.disable_cache else str(Path(args.cache_dir)),
+            "cache_dir": None if args.disable_cache else str(cache_dir),
             "bundle_cache_hit": bool(getattr(bundle, "bundle_cache_hit", False)),
             "prediction_cache_hit": bool(getattr(bundle, "prediction_cache_hit", False)),
             "bundle_cache_key": getattr(bundle, "bundle_cache_key", None),

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from stockmachine.apps.operator_paths import resolve_operator_ledger_path, resolve_strategy_workspace
 from stockmachine.domain.datetime_utils import parse_iso_datetime_like
 from stockmachine.live.order_maintenance import (
     OrderMaintenancePolicy,
@@ -18,9 +19,19 @@ from stockmachine.state import LocalLedger
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan stale open-order maintenance for paper trading runs.")
     parser.add_argument(
+        "--strategy-project",
+        default=None,
+        help="Optional strategy project id used to resolve default operator paths.",
+    )
+    parser.add_argument(
+        "--artifact-root",
+        default="artifacts",
+        help="Artifact root used when resolving project-scoped default paths.",
+    )
+    parser.add_argument(
         "--ledger",
         type=Path,
-        default=Path("artifacts/paper_demo/paper_ledger.sqlite3"),
+        default=None,
         help="Path to the paper-trading SQLite ledger.",
     )
     parser.add_argument("--run-id", help="Use a specific run id.")
@@ -58,6 +69,11 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.ledger = resolve_operator_ledger_path(
+        ledger_path=args.ledger,
+        strategy_project=getattr(args, "strategy_project", None),
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
     ledger = LocalLedger(args.ledger)
     ledger.initialize()
     try:
@@ -78,7 +94,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             session_date=session_date,
             as_of_utc=as_of_utc,
         )
-        print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+        workspace = resolve_strategy_workspace(
+            strategy_project=getattr(args, "strategy_project", None),
+            artifact_root=getattr(args, "artifact_root", "artifacts"),
+        )
+        payload = summary.to_dict()
+        if workspace is not None:
+            payload["strategy_workspace"] = workspace.to_dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     finally:
         ledger.close()

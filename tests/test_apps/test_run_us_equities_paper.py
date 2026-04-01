@@ -640,6 +640,45 @@ def test_runner_records_prediction_window_context_in_manifest(tmp_path) -> None:
     assert payload["meta"]["prediction_context"]["prediction_window"]["end"] == "2026-03-20"
 
 
+def test_runner_derives_strategy_lineage_from_horizon_defaults(tmp_path) -> None:
+    ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
+    ledger.initialize()
+    runner = PaperRunner(
+        PaperRunDependencies(
+            signal_model=_OneSignalModel(),
+            portfolio_policy=_OneTargetPolicy(),
+            execution_policy=_OneExecutionPolicy(),
+            universe_provider=_OneUniverseProvider(),
+            account_provider=_OneAccountProvider(),
+            market_data_provider=_OneMarketDataProvider(),
+            ledger=ledger,
+        )
+    )
+
+    report = runner.run(
+        PaperRunConfig(
+            session_date=date(2026, 3, 22),
+            dry_run=True,
+            universe=("AAPL",),
+            run_name="strategy-lineage-test",
+            horizon_bars=5,
+            strategy_track="swing_rebalance",
+        )
+    )
+
+    payload = report.to_dict()
+    manifest = ledger.get_run_manifest(payload["run_id"])
+
+    assert manifest is not None
+    assert manifest.meta["strategy_lineage"] == {
+        "strategy_horizon_bucket": "h5",
+        "strategy_family": "us_equities",
+        "strategy_project": "us_equities_h5",
+        "strategy_track": "swing_rebalance",
+    }
+    assert manifest.data_snapshot["strategy_lineage"]["strategy_project"] == "us_equities_h5"
+
+
 def test_runner_skips_new_buys_when_existing_positions_are_not_mature(tmp_path, monkeypatch) -> None:
     ledger = LocalLedger(tmp_path / "paper-ledger.sqlite3")
     ledger.initialize()

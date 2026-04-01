@@ -13,11 +13,20 @@ This is the short runbook for the paper demo.
 ## Recommended commands
 
 ```powershell
-python -m stockmachine.apps.paper_smoke --session-date 2026-03-22 --run-name paper-smoke --artifact-root artifacts
-python -m stockmachine.apps.paper_backfill --ledger-path artifacts/paper_demo/paper_ledger.sqlite3 latest-run
-python -m stockmachine.apps.paper_reconcile latest-run --ledger artifacts/paper_demo/paper_ledger.sqlite3
-python -m stockmachine.apps.paper_maintain latest-run --ledger artifacts/paper_demo/paper_ledger.sqlite3
+python -m stockmachine.apps.paper_smoke --strategy-profile h5/us_extra_trees_daily --session-date 2026-03-22 --run-name paper-smoke --artifact-root artifacts
+python -m stockmachine.apps.paper_backfill latest-run --strategy-project us_equities_h5 --artifact-root artifacts
+python -m stockmachine.apps.paper_reconcile latest-run --strategy-project us_equities_h5 --artifact-root artifacts
+python -m stockmachine.apps.paper_maintain latest-run --strategy-project us_equities_h5 --artifact-root artifacts
 ```
+
+By default these commands now resolve the active h5 workspace under:
+
+- `artifacts/strategy_projects/us_equities_h5/paper/paper_ledger.sqlite3`
+- `artifacts/strategy_projects/us_equities_h5/paper/reports`
+- `artifacts/strategy_projects/us_equities_h5/paper/paper_daily.kill`
+
+Override with `--ledger-path`, `--artifact-dir`, or `--kill-switch-path` when a
+run needs to point at a non-default workspace.
 
 ## Guardrails
 

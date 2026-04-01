@@ -19,6 +19,7 @@ from stockmachine.apps.run_us_equities_paper import (
     parse_session_date,
 )
 from stockmachine.data.loaders.silver import load_silver_table
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.ingestion.jobs import collect_research_seed
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.monitoring.healthcheck import build_paper_daily_healthcheck
@@ -191,6 +192,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         artifact_root=getattr(args, "artifact_root", "artifacts"),
         model_name=getattr(args, "model", None),
         session_date=session_date,
+        strategy_project=getattr(args, "strategy_project", None),
     )
     resolved_artifact_dir = str(artifact_link.artifact_dir) if artifact_link.artifact_dir is not None else None
     silver_refresh_payload = maybe_refresh_silver_before_run(
@@ -284,6 +286,12 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
             dry_run=not args.execute,
             universe=tuple(args.universe),
             run_name=args.run_name,
+            horizon_bars=args.horizon,
+            strategy_profile=getattr(args, "strategy_profile", None),
+            strategy_family=getattr(args, "strategy_family", None),
+            strategy_project=getattr(args, "strategy_project", None),
+            strategy_horizon_bucket=getattr(args, "strategy_horizon_bucket", None),
+            strategy_track=getattr(args, "strategy_track", None),
             artifact_dir=resolved_artifact_dir,
             execution_equity_cap=args.execution_equity_cap,
             post_submit_poll_seconds=args.post_submit_poll_seconds,
@@ -318,6 +326,12 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
             payload.summary["artifact_dir"] = resolved_artifact_dir
         if getattr(args, "strategy_profile", None) is not None:
             payload.summary["strategy_profile"] = str(args.strategy_profile)
+        strategy_lineage = _strategy_lineage_from_args(args)
+        if strategy_lineage:
+            payload.summary["strategy_lineage"] = strategy_lineage
+        strategy_workspace = _strategy_workspace_from_args(args)
+        if strategy_workspace is not None:
+            payload.summary["strategy_workspace"] = strategy_workspace
         return payload.to_dict()
     except Exception as exc:
         payload = PaperDailyOperationPayload(
@@ -628,7 +642,7 @@ def summarize_paper_daily_result(
         decision = "executed_with_override" if (override_allowed and not preflight.policy_allowed) else "executed"
     elif stage == "failed":
         decision = "failed"
-    return {
+    summary = {
         "session_date": session_date.isoformat(),
         "run_name": run_name,
         "stage": stage,
@@ -644,6 +658,24 @@ def summarize_paper_daily_result(
     if isinstance(prediction_context, Mapping):
         summary["prediction_context"] = dict(prediction_context)
     return summary
+
+
+def _strategy_lineage_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    lineage = {
+        "strategy_family": getattr(args, "strategy_family", None),
+        "strategy_project": getattr(args, "strategy_project", None),
+        "strategy_horizon_bucket": getattr(args, "strategy_horizon_bucket", None),
+        "strategy_track": getattr(args, "strategy_track", None),
+    }
+    return {key: value for key, value in lineage.items() if value not in (None, "")}
+
+
+def _strategy_workspace_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    strategy_project = getattr(args, "strategy_project", None)
+    if strategy_project in (None, ""):
+        return None
+    artifact_root = getattr(args, "artifact_root", "artifacts")
+    return build_strategy_project_paths(str(strategy_project), artifact_root=artifact_root).to_dict()
 def _safe_build_post_run_payload(
     *,
     ledger_path: str | Path,

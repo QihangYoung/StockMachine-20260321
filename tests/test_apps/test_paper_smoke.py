@@ -5,6 +5,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from stockmachine.apps import paper_smoke
+from stockmachine.domain.project_paths import build_strategy_project_paths
 
 
 def _make_artifact_dir(root: Path) -> Path:
@@ -134,6 +135,9 @@ def test_paper_smoke_strategy_profile_sets_defaults_and_recommended_command(tmp_
 
     assert exit_code == 0
     assert output["strategy_profile"] == "us_ridge_daily"
+    assert output["strategy_lineage"]["strategy_project"] == "us_equities_h5"
+    workspace = build_strategy_project_paths("us_equities_h5", artifact_root=artifact_root)
+    assert output["strategy_workspace"]["ledger_path"] == str(workspace.ledger_path)
     assert output["model"] == "ridge"
     assert output["run_name"] == "us-ridge-daily"
     assert output["artifact_link"]["artifact_dir"] == str(artifact_dir)
@@ -152,6 +156,8 @@ def test_paper_smoke_parse_args_reads_sys_argv_when_not_explicit(monkeypatch) ->
     assert args.strategy_profile == "us_hist_gbm_ridge_mean_daily"
     assert args.model == "ensemble_hist_gbm_ridge_mean"
     assert args.run_name == "us-hist-gbm-ridge-mean-daily"
+    assert args.strategy_project == "us_equities_h5"
+    assert args.ledger_path == str(build_strategy_project_paths("us_equities_h5").ledger_path)
 
 
 def test_paper_smoke_rank_profile_sets_defaults(tmp_path, monkeypatch, capsys) -> None:
@@ -340,5 +346,6 @@ def test_paper_smoke_extra_trees_profile_sets_defaults(tmp_path, monkeypatch, ca
 
     assert exit_code == 0
     assert output["strategy_profile"] == "us_extra_trees_daily"
+    assert output["strategy_lineage"]["strategy_horizon_bucket"] == "h5"
     assert output["model"] == "extra_trees"
     assert output["run_name"] == "us-extra-trees-daily"

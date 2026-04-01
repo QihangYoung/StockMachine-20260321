@@ -1,0 +1,15 @@
+{
+  "project_id": "us_equities_h5",
+  "description": "Active 5-session US equities swing strategy line used by the current paper/demo stack.",
+  "strategy_family": "us_equities",
+  "strategy_horizon_bucket": "h5",
+  "status": "active",
+  "owner": "research",
+  "notes": "Current production-like paper workflow for US equities swing rebalancing.",
+  "entrypoints": {
+    "paper_profiles_dir": "configs/strategies/h5",
+    "paper_daily_app": "stockmachine.apps.paper_daily",
+    "paper_smoke_app": "stockmachine.apps.paper_smoke",
+    "paper_runner_app": "stockmachine.apps.run_us_equities_paper"
+  }
+}

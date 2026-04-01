@@ -5,6 +5,7 @@ import json
 from datetime import date
 from typing import Any, Sequence
 
+from stockmachine.apps.operator_paths import resolve_operator_ledger_path, resolve_strategy_workspace
 from stockmachine.monitoring.digest import (
     build_daily_summary_payload,
     build_operator_digest_payload,
@@ -17,8 +18,18 @@ from stockmachine.state.ledger import LocalLedger
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate paper-run operator reports as JSON.")
     parser.add_argument(
+        "--strategy-project",
+        default=None,
+        help="Optional strategy project id used to resolve default operator paths.",
+    )
+    parser.add_argument(
+        "--artifact-root",
+        default="artifacts",
+        help="Artifact root used when resolving project-scoped default paths.",
+    )
+    parser.add_argument(
         "--ledger-path",
-        default="artifacts/paper_demo/paper_ledger.sqlite3",
+        default=None,
         help="Path to the local paper-demo ledger SQLite file.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -86,7 +97,20 @@ def dispatch_command(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    args.ledger_path = str(
+        resolve_operator_ledger_path(
+            ledger_path=args.ledger_path,
+            strategy_project=getattr(args, "strategy_project", None),
+            artifact_root=getattr(args, "artifact_root", "artifacts"),
+        )
+    )
     payload = dispatch_command(args)
+    workspace = resolve_strategy_workspace(
+        strategy_project=getattr(args, "strategy_project", None),
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    if workspace is not None:
+        payload["strategy_workspace"] = workspace.to_dict()
     print(json.dumps(payload, indent=2, default=_json_default, sort_keys=True))
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from stockmachine.apps import run_us_equities_model_sweep as sweep
+from stockmachine.domain.project_paths import build_strategy_project_paths
 
 
 def test_model_sweep_writes_summary_csv_and_creates_directories(tmp_path, monkeypatch, capsys) -> None:
@@ -149,3 +150,46 @@ def test_model_sweep_continues_after_model_failure(tmp_path, monkeypatch, capsys
     assert frame.loc[0, "error_message"] == "boom"
     assert frame.loc[1, "total_return"] == 0.12
     assert calls == ["broken_model", "hist_gbm"]
+
+
+def test_model_sweep_defaults_to_project_scoped_research_root(tmp_path, monkeypatch, capsys) -> None:
+    calls: list[dict[str, object]] = []
+
+    def _run_backtest(**kwargs):
+        calls.append(kwargs)
+        return {
+            "model": kwargs["model_name"],
+            "summary": {
+                "sessions": 4,
+                "total_return": 0.05,
+                "annualized_return": 0.04,
+                "annualized_volatility": 0.1,
+                "sharpe": 0.4,
+                "max_drawdown": -0.03,
+                "benchmark_total_return": 0.02,
+                "mean_turnover": 0.5,
+                "mean_cost_bps": 10.0,
+            },
+            "artifacts_dir": str(kwargs["output_dir"]),
+        }
+
+    monkeypatch.setattr(sweep, "run_silver_chain_backtest", _run_backtest)
+
+    exit_code = sweep.main(
+        [
+            "--models",
+            "hist_gbm",
+            "--artifact-root",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    workspace = build_strategy_project_paths("us_equities_h5", artifact_root=tmp_path / "artifacts")
+    expected_root = workspace.research_root / "us_equities_model_sweep"
+    assert exit_code == 0
+    assert payload["strategy_project"] == "us_equities_h5"
+    assert payload["strategy_workspace"] == workspace.to_dict()
+    assert payload["output_root"] == str(expected_root)
+    assert (expected_root / "summary_metrics.csv").exists()
+    assert calls[0]["output_dir"] == expected_root / "hist_gbm"

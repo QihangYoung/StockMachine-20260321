@@ -118,3 +118,28 @@ def test_build_paper_artifact_link_uses_manifest_meta(tmp_path) -> None:
     assert link.artifact_dir == artifact_dir
     assert link.source == "manifest_meta"
     assert link.exists is True
+
+
+def test_build_paper_artifact_link_prefers_project_scoped_research_root(tmp_path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    scoped_candidate = artifact_root / "strategy_projects" / "us_equities_h5" / "research" / "paper-smoke-2026-03-22-hist_gbm"
+    scoped_candidate.mkdir(parents=True)
+    for file_name in ("backtest_summary.csv", "backtest_records.csv", "predictions.csv"):
+        (scoped_candidate / file_name).write_text("dummy\n", encoding="utf-8")
+
+    generic_candidate = artifact_root / "paper-smoke-2026-03-22-hist_gbm"
+    generic_candidate.mkdir(parents=True)
+    for file_name in ("backtest_summary.csv", "backtest_records.csv", "predictions.csv"):
+        (generic_candidate / file_name).write_text("dummy\n", encoding="utf-8")
+
+    link = build_paper_artifact_link(
+        artifact_root=artifact_root,
+        run_name="paper-smoke",
+        session_date=date(2026, 3, 22),
+        model_name="hist_gbm",
+        strategy_project="us_equities_h5",
+    )
+
+    assert link.artifact_dir == scoped_candidate
+    assert "matched_strategy_project_root" in link.notes
+    assert str(artifact_root / "strategy_projects" / "us_equities_h5" / "research") in link.search_roots

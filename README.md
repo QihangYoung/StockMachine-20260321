@@ -25,6 +25,8 @@ clear before any model, backtest, or broker code grows around them.
 
 ```text
 configs/                  Runtime and environment configuration
+  strategies/            Built-in runnable strategy profiles grouped by horizon
+  strategy_projects/     Project-level metadata for each horizon-scoped line
 docs/                     Architecture and research notes
 src/stockmachine/         Python package
 tests/                    Test packages reserved for each subsystem
@@ -73,6 +75,35 @@ single source.
 
 This means we can start quickly with public data, while still preparing for
 better source control and reproducibility later.
+
+## Strategy Subprojects
+
+The repository now treats materially different holding horizons as separate
+strategy subprojects instead of minor parameter variants.
+
+- `us_equities_h5`: the active 5-session US equities swing line
+- `us_equities_h1`: a scaffolded 1-session / daily-rebalance line reserved for future work
+
+This split is intentional. A horizon-1 strategy is expected to diverge from the
+current horizon-5 stack in features, execution, turnover controls, evaluation,
+and operational guardrails. Keeping them as separate subprojects reduces
+configuration drift and makes artifacts easier to audit.
+
+Two config layers now exist:
+
+- [`configs/strategies`](/E:/CodeX/StockMachine-260321/configs/strategies): runnable paper profile defaults
+- [`configs/strategy_projects`](/E:/CodeX/StockMachine-260321/configs/strategy_projects): project identity, maturity, and entrypoint metadata
+
+Canonical project workspaces now live under:
+
+- `artifacts/strategy_projects/<strategy_project>/research`
+- `artifacts/strategy_projects/<strategy_project>/paper`
+
+For example, the active h5 line defaults to:
+
+- `artifacts/strategy_projects/us_equities_h5/research/...`
+- `artifacts/strategy_projects/us_equities_h5/paper/paper_ledger.sqlite3`
+- `artifacts/strategy_projects/us_equities_h5/paper/paper_daily.kill`
 
 ## First Runnable Collector
 
@@ -216,6 +247,25 @@ $env:PYTHONPATH='src'
 python -m stockmachine.apps.run_p1_rigor_suite --output-root artifacts/p1_rigor_suite
 ```
 
+If `--output-root` is omitted, both research entrypoints now default to the
+project-scoped research workspace for the relevant horizon. For the active
+`h5` line that means:
+
+```text
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_us_equities_model_sweep --models hist_gbm random_forest --strategy-project us_equities_h5
+python -m stockmachine.apps.run_p1_rigor_suite --models hist_gbm lightgbm_regressor --strategy-project us_equities_h5
+```
+
+which writes into:
+
+- `artifacts/strategy_projects/us_equities_h5/research/us_equities_model_sweep`
+- `artifacts/strategy_projects/us_equities_h5/research/p1_rigor_suite`
+
+`run_p1_rigor_suite` also defaults its cache to:
+
+- `artifacts/strategy_projects/us_equities_h5/research/cache/p1_rigor_suite`
+
 The suite currently writes:
 
 - `strict_full/summary_metrics.csv`
@@ -260,25 +310,26 @@ Execute mode is available, but it will place orders into the Alpaca paper accoun
 Operator inspection commands:
 
 ```text
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --strategy-profile us_hist_gbm_random_forest_lightgbm_rank_daily --artifact-root artifacts
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --strategy-profile h5/us_hist_gbm_random_forest_lightgbm_rank_daily --artifact-root artifacts
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_smoke --session-date 2026-03-22 --model hist_gbm --run-name stable-smoke --artifact-root artifacts
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops latest-run
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops open-orders
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_backfill --ledger-path artifacts/paper_demo/paper_ledger.sqlite3 latest-run
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily healthcheck
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --strategy-profile us_hist_gbm_random_forest_lightgbm_rank_daily --session-date 2026-03-22 --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops latest-run --strategy-project us_equities_h5 --artifact-root artifacts
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_ops open-orders --strategy-project us_equities_h5 --artifact-root artifacts
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_backfill latest-run --strategy-project us_equities_h5 --artifact-root artifacts
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily healthcheck --strategy-project us_equities_h5 --artifact-root artifacts
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --strategy-profile h5/us_hist_gbm_random_forest_lightgbm_rank_daily --session-date 2026-03-22 --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2
 $env:PYTHONPATH='src'; python -m stockmachine.apps.paper_daily run --session-date 2026-03-22 --model hist_gbm --run-name stable-daily-demo --execution-equity-cap 500 --max-order-notional 550 --max-total-notional 550 --max-total-orders 2 --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_reconcile latest-run --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_maintain latest-run --broker-orders-json path/to/open_orders.json --stale-after-minutes 60
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report run-index --limit 10
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report daily-summary --session-date 2026-03-22
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report health-trend --session-date 2026-03-22 --limit-runs 10 --limit-sessions 5
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report anomaly-summary --session-date 2026-03-22 --limit-runs 10
-$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report operator-digest --session-date 2026-03-22 --limit 10
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_reconcile latest-run --strategy-project us_equities_h5 --artifact-root artifacts --artifact-dir artifacts/us_equities_silver_chain_2025_hist_gbm_alpaca_adj
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_maintain latest-run --strategy-project us_equities_h5 --artifact-root artifacts --broker-orders-json path/to/open_orders.json --stale-after-minutes 60
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report run-index --strategy-project us_equities_h5 --artifact-root artifacts --limit 10
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report daily-summary --strategy-project us_equities_h5 --artifact-root artifacts --session-date 2026-03-22
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report health-trend --strategy-project us_equities_h5 --artifact-root artifacts --session-date 2026-03-22 --limit-runs 10 --limit-sessions 5
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report anomaly-summary --strategy-project us_equities_h5 --artifact-root artifacts --session-date 2026-03-22 --limit-runs 10
+$env:PYTHONPATH='src'; python -m stockmachine.apps.paper_report operator-digest --strategy-project us_equities_h5 --artifact-root artifacts --session-date 2026-03-22 --limit 10
 ```
 
 The daily runner also supports a filesystem kill switch at
-`artifacts/paper_demo/paper_daily.kill` by default, or a custom path via
+`artifacts/strategy_projects/us_equities_h5/paper/paper_daily.kill` by default,
+or a custom path via
 `--kill-switch-path`.
 
 `paper_smoke` is the safest operator entrypoint for repeatable checks. It
@@ -292,18 +343,36 @@ recorded order ids from broker history and writes any missing fills and fill
 audits into the ledger.
 
 Built-in paper strategy profiles now live under
-[`configs/strategies`](/E:/CodeX/StockMachine-260321/configs/strategies). The
-first low-risk migration set includes:
+[`configs/strategies/h5`](/E:/CodeX/StockMachine-260321/configs/strategies/h5).
+Legacy aliases such as `us_hist_gbm_random_forest_lightgbm_rank_daily` still
+resolve, but the preferred explicit ids now include the horizon prefix such as
+`h5/us_hist_gbm_random_forest_lightgbm_rank_daily`. The first low-risk
+migration set includes:
 
-- `us_hist_gbm_daily`
-- `us_ridge_daily`
-- `us_hist_gbm_ridge_mean_daily`
-- `us_hist_gbm_ridge_rank_daily`
-- `us_hist_gbm_random_forest_rank_daily`
-- `us_random_forest_lightgbm_rank_daily`
-- `us_hist_gbm_random_forest_lightgbm_rank_daily`
+- `h5/us_hist_gbm_daily`
+- `h5/us_ridge_daily`
+- `h5/us_hist_gbm_ridge_mean_daily`
+- `h5/us_hist_gbm_ridge_rank_daily`
+- `h5/us_hist_gbm_random_forest_rank_daily`
+- `h5/us_random_forest_lightgbm_rank_daily`
+- `h5/us_hist_gbm_random_forest_lightgbm_rank_daily`
 
 Profiles provide default model and risk parameters, while CLI flags still
 override them when needed.
+
+When no explicit ledger or kill-switch path is supplied, paper/operator CLIs
+now resolve them from the selected `strategy_project`. For `us_equities_h5`
+that means:
+
+- ledger: `artifacts/strategy_projects/us_equities_h5/paper/paper_ledger.sqlite3`
+- reports: `artifacts/strategy_projects/us_equities_h5/paper/reports`
+- kill switch: `artifacts/strategy_projects/us_equities_h5/paper/paper_daily.kill`
+
+The project-level metadata for this split lives under
+[`configs/strategy_projects`](/E:/CodeX/StockMachine-260321/configs/strategy_projects).
+The first low-risk migration set includes:
+
+- `us_equities_h5`: active 5-session swing line
+- `us_equities_h1`: scaffolded 1-session line for future daily-rebalance work
 
 The current productization plan lives in [docs/paper-productization-plan.md](/E:/CodeX/StockMachine-260321/docs/paper-productization-plan.md).

@@ -4,6 +4,7 @@ import json
 from datetime import date, datetime, timezone
 
 from stockmachine.apps.paper_report import build_arg_parser, dispatch_command, main
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.state import LocalLedger, OrderRecord, RunManifestRecord, RunRecord
 
 
@@ -173,3 +174,28 @@ def test_paper_report_daily_digest_health_trend_and_operator_digest_json(tmp_pat
         "broker_rejection",
         "open_orders_lingering",
     }
+
+
+def test_paper_report_strategy_project_resolves_default_ledger(tmp_path, capsys) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = build_strategy_project_paths("us_equities_h5", artifact_root=artifact_root)
+    workspace.paper_root.mkdir(parents=True, exist_ok=True)
+    ledger = LocalLedger(workspace.ledger_path)
+    ledger.initialize()
+    _seed_digest_ledger(ledger)
+
+    main(
+        [
+            "--strategy-project",
+            "us_equities_h5",
+            "--artifact-root",
+            str(artifact_root),
+            "run-index",
+            "--limit",
+            "5",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "run-index"
+    assert payload["strategy_workspace"]["ledger_path"] == str(workspace.ledger_path)

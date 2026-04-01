@@ -4,6 +4,7 @@ from argparse import Namespace
 from datetime import date, datetime, timezone
 
 from stockmachine.apps import paper_backfill
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.state import LocalLedger, OrderDecisionRecord, OrderRecord
 
 
@@ -95,3 +96,67 @@ def test_build_backfill_payload_updates_latest_run(monkeypatch, tmp_path) -> Non
     assert order is not None
     assert order.status == "filled"
     assert len(fills) == 1
+
+
+def test_build_backfill_payload_resolves_strategy_project_default_ledger(monkeypatch, tmp_path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    workspace = build_strategy_project_paths("us_equities_h5", artifact_root=artifact_root)
+    workspace.paper_root.mkdir(parents=True, exist_ok=True)
+    ledger = LocalLedger(workspace.ledger_path)
+    ledger.initialize()
+    ledger.record_order_decision(
+        OrderDecisionRecord(
+            decision_id="decision-1",
+            run_id="run-1",
+            session_date=date(2026, 3, 22),
+            client_order_id="client-order-1",
+            symbol="AAPL",
+            side="BUY",
+            decision_type="risk_gate",
+            decision_price=100.0,
+            estimated_notional=500.0,
+            approved=True,
+            reason="approved",
+            decision_at_utc=datetime(2026, 3, 22, 0, 59, tzinfo=timezone.utc),
+            meta={},
+        )
+    )
+    ledger.upsert_order(
+        OrderRecord(
+            order_id="broker-order-1",
+            run_id="run-1",
+            session_date=date(2026, 3, 22),
+            client_order_id="client-order-1",
+            symbol="AAPL",
+            side="buy",
+            quantity=5,
+            order_type="market",
+            limit_price=None,
+            status="pending_new",
+            filled_quantity=0,
+            avg_fill_price=None,
+            submitted_at_utc=datetime(2026, 3, 22, 1, 0, tzinfo=timezone.utc),
+            updated_at_utc=datetime(2026, 3, 22, 1, 0, tzinfo=timezone.utc),
+            broker_payload={},
+        )
+    )
+    ledger.close()
+
+    monkeypatch.setattr(
+        paper_backfill,
+        "AlpacaTradingAdapter",
+        type("_BrokerFactory", (), {"from_env": staticmethod(lambda: _FilledBroker())}),
+    )
+
+    payload = paper_backfill.build_backfill_payload(
+        Namespace(
+            ledger_path=None,
+            strategy_project="us_equities_h5",
+            artifact_root=str(artifact_root),
+            run_id=None,
+            command="latest-run",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["strategy_workspace"]["ledger_path"] == str(workspace.ledger_path)

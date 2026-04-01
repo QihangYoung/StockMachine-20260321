@@ -11,6 +11,7 @@ from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.apps import paper_daily
 from stockmachine.apps.paper_profiles import load_strategy_profile
 from stockmachine.apps.run_us_equities_paper import parse_session_date
+from stockmachine.domain.project_paths import build_strategy_project_paths
 from stockmachine.monitoring.reports import build_paper_artifact_link
 
 
@@ -75,7 +76,10 @@ def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
         run_name=args.run_name,
         session_date=session_date,
         model_name=args.model,
+        strategy_project=getattr(args, "strategy_project", None),
     )
+    strategy_lineage = paper_daily._strategy_lineage_from_args(args)
+    strategy_workspace = _strategy_workspace_from_args(args)
     run_args = _build_run_namespace(args, session_date=session_date, artifact_link=artifact_link)
     try:
         run_payload = paper_daily.run_command(run_args)
@@ -85,6 +89,9 @@ def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
             "ok": False,
             "session_date": session_date.isoformat(),
             "run_name": args.run_name,
+            "strategy_profile": getattr(args, "strategy_profile", None),
+            "strategy_lineage": strategy_lineage,
+            "strategy_workspace": strategy_workspace,
             "model": args.model,
             "dry_run": not args.execute,
             "artifact_link": artifact_link.to_dict(),
@@ -117,6 +124,8 @@ def build_smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
         "session_date": session_date.isoformat(),
         "run_name": args.run_name,
         "strategy_profile": getattr(args, "strategy_profile", None),
+        "strategy_lineage": strategy_lineage,
+        "strategy_workspace": strategy_workspace,
         "model": args.model,
         "dry_run": not args.execute,
         "artifact_link": artifact_link.to_dict(),
@@ -152,6 +161,10 @@ def _build_run_namespace(
         demo_mode=args.demo_mode,
         model=args.model,
         strategy_profile=getattr(args, "strategy_profile", None),
+        strategy_family=getattr(args, "strategy_family", None),
+        strategy_project=getattr(args, "strategy_project", None),
+        strategy_horizon_bucket=getattr(args, "strategy_horizon_bucket", None),
+        strategy_track=getattr(args, "strategy_track", None),
         top_k=args.top_k,
         horizon=args.horizon,
         data_root=args.data_root,
@@ -253,6 +266,13 @@ def _guardrails_payload(args: argparse.Namespace) -> dict[str, Any]:
         "execution_equity_cap": args.execution_equity_cap,
         "min_buying_power_buffer": args.min_buying_power_buffer,
     }
+
+
+def _strategy_workspace_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    strategy_project = getattr(args, "strategy_project", None)
+    if strategy_project in (None, ""):
+        return None
+    return build_strategy_project_paths(str(strategy_project), artifact_root=args.artifact_root).to_dict()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

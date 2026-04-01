@@ -131,6 +131,12 @@ class PaperRunConfig:
     dry_run: bool = True
     universe: tuple[str, ...] = ()
     run_name: str = "paper-demo"
+    horizon_bars: int | None = None
+    strategy_profile: str | None = None
+    strategy_family: str | None = None
+    strategy_project: str | None = None
+    strategy_horizon_bucket: str | None = None
+    strategy_track: str | None = None
     artifact_dir: str | None = None
     execution_equity_cap: float | None = None
     post_submit_poll_seconds: float = 15.0
@@ -1091,6 +1097,7 @@ class PaperRunner:
             "universe_symbols": list(universe),
             "signal_model": type(self.dependencies.signal_model).__name__,
             "portfolio_policy": type(self.dependencies.portfolio_policy).__name__,
+            "horizon_bars": int(config.horizon_bars or getattr(self.dependencies.signal_model, "horizon_bars", 0) or 0),
         }
         if session_guard_result is not None:
             data_snapshot["session_guard"] = dict(session_guard_result)
@@ -1111,6 +1118,9 @@ class PaperRunner:
             "post_submit_poll_interval_seconds": config.post_submit_poll_interval_seconds,
         }
         ledger_path = str(self.dependencies.ledger.path) if self.dependencies.ledger is not None else None
+        strategy_lineage = self._strategy_lineage_from_config(config)
+        if strategy_lineage:
+            data_snapshot["strategy_lineage"] = dict(strategy_lineage)
         return build_paper_run_manifest(
             run_id=run_id,
             session_date=config.session_date,
@@ -1133,9 +1143,27 @@ class PaperRunner:
                     artifact_dir=config.artifact_dir,
                     model_name=self._resolve_model_name(),
                     session_date=config.session_date,
+                    strategy_project=config.strategy_project,
                 ).to_dict(),
+                "strategy_profile": config.strategy_profile,
+                "strategy_lineage": strategy_lineage,
             },
         )
+
+    def _strategy_lineage_from_config(self, config: PaperRunConfig) -> dict[str, Any]:
+        horizon_bars = int(config.horizon_bars or getattr(self.dependencies.signal_model, "horizon_bars", 0) or 0)
+        strategy_horizon_bucket = config.strategy_horizon_bucket or (f"h{horizon_bars}" if horizon_bars > 0 else None)
+        strategy_family = config.strategy_family or "us_equities"
+        strategy_project = config.strategy_project
+        if strategy_project in (None, "") and strategy_horizon_bucket not in (None, ""):
+            strategy_project = f"{strategy_family}_{strategy_horizon_bucket}"
+        lineage: dict[str, Any] = {
+            "strategy_horizon_bucket": strategy_horizon_bucket,
+            "strategy_family": strategy_family,
+            "strategy_project": strategy_project,
+            "strategy_track": config.strategy_track,
+        }
+        return {key: value for key, value in lineage.items() if value not in (None, "")}
 
     def _evaluate_session_guard(
         self,
@@ -1774,6 +1802,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-date", default=date.today().isoformat())
     parser.add_argument("--universe", nargs="*", default=[])
     parser.add_argument("--run-name", default="paper-demo")
+    parser.add_argument("--strategy-profile", default=None)
+    parser.add_argument("--strategy-family", default=None)
+    parser.add_argument("--strategy-project", default=None)
+    parser.add_argument("--strategy-horizon-bucket", default=None)
+    parser.add_argument("--strategy-track", default=None)
     parser.add_argument("--execute", action="store_true", help="Submit orders instead of dry-run mode.")
     parser.add_argument("--output-format", choices=("json",), default="json")
     parser.add_argument("--demo-mode", action="store_true", help="Use the static no-op dependencies.")
@@ -1813,6 +1846,7 @@ def build_demo_runner(universe: Sequence[str] | None = None) -> tuple[PaperRunne
         session_date=date.today(),
         dry_run=True,
         universe=resolved_universe,
+        horizon_bars=5,
         execution_equity_cap=None,
         post_submit_poll_seconds=0.0,
         post_submit_poll_interval_seconds=0.0,
@@ -1890,6 +1924,7 @@ def build_alpaca_paper_runner(
         dry_run=True,
         universe=tuple(universe or ()),
         run_name=f"{resolved_model_name}-paper-demo",
+        horizon_bars=horizon,
         artifact_dir=None,
         execution_equity_cap=None,
         post_submit_poll_seconds=15.0,
@@ -1940,6 +1975,12 @@ def main() -> None:
             dry_run=not args.execute,
             universe=tuple(args.universe),
             run_name=args.run_name,
+            horizon_bars=args.horizon,
+            strategy_profile=getattr(args, "strategy_profile", None),
+            strategy_family=getattr(args, "strategy_family", None),
+            strategy_project=getattr(args, "strategy_project", None),
+            strategy_horizon_bucket=getattr(args, "strategy_horizon_bucket", None),
+            strategy_track=getattr(args, "strategy_track", None),
             execution_equity_cap=args.execution_equity_cap,
             post_submit_poll_seconds=args.post_submit_poll_seconds,
             post_submit_poll_interval_seconds=args.post_submit_poll_interval_seconds,

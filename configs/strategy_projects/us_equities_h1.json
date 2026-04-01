@@ -1,0 +1,13 @@
+{
+  "project_id": "us_equities_h1",
+  "description": "Scaffolded 1-session US equities strategy line reserved for daily-rebalance research and execution work.",
+  "strategy_family": "us_equities",
+  "strategy_horizon_bucket": "h1",
+  "status": "scaffold",
+  "owner": "research",
+  "notes": "Not production-ready. Intended for horizon-1 features, execution, turnover control, and evaluation to evolve independently from h5.",
+  "entrypoints": {
+    "paper_profiles_dir": "configs/strategies/h1",
+    "readme": "configs/strategies/h1/README.md"
+  }
+}

@@ -1,10 +1,14 @@
 {
-  "profile_id": "us_hist_gbm_daily",
-  "description": "Default US daily paper profile backed by the hist_gbm baseline.",
-  "run_name": "us-hist-gbm-daily",
-  "model": "hist_gbm",
+  "profile_id": "us_hist_gbm_ridge_mean_daily",
+  "description": "US daily paper profile backed by the mean blend of hist_gbm and ridge.",
+  "run_name": "us-hist-gbm-ridge-mean-daily",
+  "model": "ensemble_hist_gbm_ridge_mean",
   "top_k": 10,
   "horizon": 5,
+  "strategy_family": "us_equities",
+  "strategy_project": "us_equities_h5",
+  "strategy_horizon_bucket": "h5",
+  "strategy_track": "swing_rebalance",
   "min_close": 10.0,
   "min_median_dollar_volume_20": 50000000.0,
   "max_vol_20": 0.04,
@@ -18,5 +22,5 @@
   "execution_equity_cap": null,
   "post_submit_poll_seconds": 15.0,
   "post_submit_poll_interval_seconds": 2.0,
-  "artifact_model": "hist_gbm"
+  "artifact_model": "ensemble_hist_gbm_ridge_mean"
 }

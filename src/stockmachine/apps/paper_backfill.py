@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from stockmachine.apps.operator_paths import resolve_operator_ledger_path, resolve_strategy_workspace
 from stockmachine.execution.brokers import AlpacaTradingAdapter
 from stockmachine.live import backfill_order_statuses
 from stockmachine.state import LocalLedger
@@ -13,8 +14,18 @@ from stockmachine.state import LocalLedger
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Backfill broker order history into the local paper ledger.")
     parser.add_argument(
+        "--strategy-project",
+        default=None,
+        help="Optional strategy project id used to resolve default operator paths.",
+    )
+    parser.add_argument(
+        "--artifact-root",
+        default="artifacts",
+        help="Artifact root used when resolving project-scoped default paths.",
+    )
+    parser.add_argument(
         "--ledger-path",
-        default="artifacts/paper_demo/paper_ledger.sqlite3",
+        default=None,
         help="Path to the local paper-demo ledger SQLite file.",
     )
     parser.add_argument("--run-id", default=None, help="Specific run id to backfill. Defaults to the latest run.")
@@ -25,14 +36,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def build_backfill_payload(args: argparse.Namespace) -> dict[str, Any]:
     broker = AlpacaTradingAdapter.from_env()
-    with LocalLedger(args.ledger_path) as ledger:
+    resolved_ledger_path = resolve_operator_ledger_path(
+        ledger_path=args.ledger_path,
+        strategy_project=getattr(args, "strategy_project", None),
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    workspace = resolve_strategy_workspace(
+        strategy_project=getattr(args, "strategy_project", None),
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    with LocalLedger(resolved_ledger_path) as ledger:
         ledger.initialize()
         resolved_run_id = _resolve_run_id(ledger, args)
         if resolved_run_id is None:
             return {
                 "command": "backfill",
                 "ok": False,
-                "ledger_path": str(args.ledger_path),
+                "ledger_path": str(resolved_ledger_path),
                 "run_id": None,
                 "error": {
                     "type": "ValueError",
@@ -55,10 +75,10 @@ def build_backfill_payload(args: argparse.Namespace) -> dict[str, Any]:
         after_audits = len(ledger.list_fill_audits(run_id=resolved_run_id))
         after_open_orders = len(ledger.list_open_orders(run_id=resolved_run_id))
 
-        return {
+        payload = {
             "command": "backfill",
             "ok": len(result.errors) == 0,
-            "ledger_path": str(args.ledger_path),
+            "ledger_path": str(resolved_ledger_path),
             "run_id": resolved_run_id,
             "summary": {
                 "candidate_orders": len(candidate_orders),
@@ -74,6 +94,9 @@ def build_backfill_payload(args: argparse.Namespace) -> dict[str, Any]:
             },
             "backfill": result.to_dict(),
         }
+        if workspace is not None:
+            payload["strategy_workspace"] = workspace.to_dict()
+        return payload
 
 
 def main(argv: Sequence[str] | None = None) -> int:

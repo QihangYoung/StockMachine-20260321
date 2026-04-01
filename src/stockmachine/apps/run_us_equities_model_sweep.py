@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from stockmachine.apps.research_paths import resolve_research_output_root, resolve_research_workspace
 from stockmachine.research import get_default_research_protocol
 from stockmachine.research.us_equities_baseline import OverlayConfig, run_silver_chain_backtest
 
@@ -38,7 +39,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a batch sweep of US equities backtests.")
     parser.add_argument("--models", nargs="*", default=(), help="Model names to sweep.")
     parser.add_argument("--predict-start", default="2024-01-01")
-    parser.add_argument("--output-root", default="artifacts/us_equities_model_sweep")
+    parser.add_argument("--output-root", default=None)
+    parser.add_argument("--strategy-project", default=None)
+    parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--min-close", type=float, default=10.0)
@@ -58,7 +61,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def run_model_sweep(args: argparse.Namespace) -> dict[str, Any]:
-    output_root = Path(args.output_root)
+    workspace = resolve_research_workspace(
+        strategy_project=getattr(args, "strategy_project", None),
+        horizon=args.horizon,
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
+    output_root = resolve_research_output_root(
+        output_root=getattr(args, "output_root", None),
+        default_dirname="us_equities_model_sweep",
+        strategy_project=getattr(args, "strategy_project", None),
+        horizon=args.horizon,
+        artifact_root=getattr(args, "artifact_root", "artifacts"),
+    )
     output_root.mkdir(parents=True, exist_ok=True)
     research_protocol = get_default_research_protocol()
 
@@ -128,6 +142,8 @@ def run_model_sweep(args: argparse.Namespace) -> dict[str, Any]:
         "empty_models": empty_models,
         "predict_start": args.predict_start,
         "output_root": str(output_root),
+        "strategy_project": workspace.project_id,
+        "strategy_workspace": workspace.to_dict(),
         "summary_metrics_path": str(summary_path),
         "research_protocol_path": str(protocol_path),
         "research_protocol": research_protocol.to_dict(),
