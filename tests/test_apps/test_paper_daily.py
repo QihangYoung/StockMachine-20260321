@@ -387,11 +387,34 @@ def test_run_command_fails_when_silver_refresh_cannot_reach_latest_completed_ses
 def test_maybe_refresh_silver_before_run_refreshes_to_latest_completed_session(monkeypatch) -> None:
     observed: dict[str, object] = {}
     session_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+    industry_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+    universe_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+    coverage_states = iter(
+        [
+            {"ok": False, "reason": "universe_membership_incomplete"},
+            {"ok": True, "reason": "exact_coverage"},
+        ]
+    )
 
     monkeypatch.setattr(
         paper_daily,
         "_latest_local_daily_bar_session_date",
         lambda storage: next(session_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_industry_membership_snapshot_date",
+        lambda storage: next(industry_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_universe_membership_session_date",
+        lambda storage: next(universe_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_evaluate_universe_membership_coverage",
+        lambda storage, *, expected_latest_session: next(coverage_states),
     )
 
     def _collect_research_seed(**kwargs):
@@ -415,6 +438,8 @@ def test_maybe_refresh_silver_before_run_refreshes_to_latest_completed_session(m
     assert payload["reason"] == "refresh_completed"
     assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 21)
     assert observed["collector_kwargs"]["end_date"] == date(2026, 3, 23)
+    assert observed["collector_kwargs"]["membership_start_date"] == date(2026, 3, 21)
+    assert observed["collector_kwargs"]["include_daily_bars"] is True
 
 
 def test_run_command_defaults_to_symbol_master_refresh(monkeypatch) -> None:
@@ -471,6 +496,21 @@ def test_maybe_refresh_silver_before_run_refreshes_when_symbol_master_lags(monke
         "_latest_local_symbol_master_snapshot_date",
         lambda storage: next(symbol_dates),
     )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_industry_membership_snapshot_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_universe_membership_session_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_evaluate_universe_membership_coverage",
+        lambda storage, *, expected_latest_session: {"ok": True, "reason": "exact_coverage"},
+    )
 
     def _collect_research_seed(**kwargs):
         observed["collector_kwargs"] = kwargs
@@ -495,6 +535,8 @@ def test_maybe_refresh_silver_before_run_refreshes_when_symbol_master_lags(monke
     assert payload["latest_symbol_master_snapshot_after_refresh"] == "2026-03-23"
     assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 23)
     assert observed["collector_kwargs"]["end_date"] == date(2026, 3, 23)
+    assert observed["collector_kwargs"]["include_symbol_master"] is True
+    assert observed["collector_kwargs"]["membership_start_date"] is None
 
 
 def test_maybe_refresh_silver_before_run_fails_when_symbol_master_remains_stale(monkeypatch) -> None:
@@ -510,6 +552,21 @@ def test_maybe_refresh_silver_before_run_fails_when_symbol_master_remains_stale(
         paper_daily,
         "_latest_local_symbol_master_snapshot_date",
         lambda storage: next(symbol_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_industry_membership_snapshot_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_universe_membership_session_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_evaluate_universe_membership_coverage",
+        lambda storage, *, expected_latest_session: {"ok": True, "reason": "exact_coverage"},
     )
     monkeypatch.setattr(
         paper_daily,
@@ -544,6 +601,21 @@ def test_maybe_refresh_silver_before_run_fails_when_dataset_remains_stale(monkey
     )
     monkeypatch.setattr(
         paper_daily,
+        "_latest_local_industry_membership_snapshot_date",
+        lambda storage: date(2026, 3, 20),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_universe_membership_session_date",
+        lambda storage: date(2026, 3, 20),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_evaluate_universe_membership_coverage",
+        lambda storage, *, expected_latest_session: {"ok": False, "reason": "universe_membership_incomplete"},
+    )
+    monkeypatch.setattr(
+        paper_daily,
         "collect_research_seed",
         lambda **kwargs: {"normalized_rows": 0},
     )
@@ -562,6 +634,70 @@ def test_maybe_refresh_silver_before_run_fails_when_dataset_remains_stale(monkey
     assert payload["ok"] is False
     assert payload["reason"] == "refresh_left_silver_stale"
     assert payload["refresh_end_date"] == "2026-03-23"
+
+
+def test_maybe_refresh_silver_before_run_refreshes_membership_without_repulling_bars(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_daily_bar_session_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_symbol_master_snapshot_date",
+        lambda storage: date(2026, 3, 23),
+    )
+    industry_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+    universe_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])
+    coverage_states = iter(
+        [
+            {"ok": False, "reason": "universe_membership_incomplete"},
+            {"ok": True, "reason": "exact_coverage"},
+        ]
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_industry_membership_snapshot_date",
+        lambda storage: next(industry_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_latest_local_universe_membership_session_date",
+        lambda storage: next(universe_dates),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "_evaluate_universe_membership_coverage",
+        lambda storage, *, expected_latest_session: next(coverage_states),
+    )
+
+    def _collect_research_seed(**kwargs):
+        observed["collector_kwargs"] = kwargs
+        return {"normalized_rows": 42}
+
+    monkeypatch.setattr(paper_daily, "collect_research_seed", _collect_research_seed)
+
+    payload = paper_daily.maybe_refresh_silver_before_run(
+        session_date=date(2026, 3, 24),
+        data_root="data",
+        demo_mode=False,
+        skip_refresh=False,
+        feed="iex",
+        adjustment="raw",
+        chunk_size=25,
+        include_symbol_master=True,
+    )
+
+    assert payload["ok"] is True
+    assert observed["collector_kwargs"]["include_daily_bars"] is False
+    assert observed["collector_kwargs"]["include_adj_factor"] is False
+    assert observed["collector_kwargs"]["include_symbol_master"] is False
+    assert observed["collector_kwargs"]["start_date"] == date(2026, 3, 23)
+    assert observed["collector_kwargs"]["membership_start_date"] == date(2026, 3, 21)
+    assert payload["latest_industry_membership_snapshot_after_refresh"] == "2026-03-23"
+    assert payload["latest_universe_membership_session_after_refresh"] == "2026-03-23"
 
 
 def test_healthcheck_command_uses_helper(monkeypatch) -> None:

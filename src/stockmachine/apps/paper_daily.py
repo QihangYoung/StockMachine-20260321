@@ -35,6 +35,8 @@ from stockmachine.live.run_governance import (
     DailyRunGovernanceResult,
     evaluate_daily_run_governance,
 )
+from stockmachine.research.strict_preflight import assess_universe_membership_coverage
+from stockmachine.research.universe import DEFAULT_RESEARCH_UNIVERSE_NAME
 from stockmachine.research.us_equities_baseline import OverlayConfig
 from stockmachine.state import LocalLedger
 
@@ -434,6 +436,8 @@ def maybe_refresh_silver_before_run(
     storage = StorageLayout(root=Path(data_root))
     latest_local_session = _latest_local_daily_bar_session_date(storage)
     latest_symbol_master_snapshot = _latest_local_symbol_master_snapshot_date(storage) if include_symbol_master else None
+    latest_industry_membership_snapshot = _latest_local_industry_membership_snapshot_date(storage)
+    latest_universe_membership_session = _latest_local_universe_membership_session_date(storage)
     if latest_local_session is None:
         return {
             "ok": False,
@@ -445,11 +449,18 @@ def maybe_refresh_silver_before_run(
         }
 
     expected_latest_session = _expected_latest_completed_session_date(session_date)
+    universe_membership_coverage_before = _evaluate_universe_membership_coverage(
+        storage,
+        expected_latest_session=expected_latest_session,
+    )
     if _silver_refresh_targets_met(
         latest_local_session=latest_local_session,
         latest_symbol_master_snapshot=latest_symbol_master_snapshot,
+        latest_industry_membership_snapshot=latest_industry_membership_snapshot,
+        latest_universe_membership_session=latest_universe_membership_session,
         expected_latest_session=expected_latest_session,
         include_symbol_master=include_symbol_master,
+        universe_membership_coverage=universe_membership_coverage_before,
     ):
         return {
             "ok": True,
@@ -463,9 +474,43 @@ def maybe_refresh_silver_before_run(
             "latest_symbol_master_snapshot_before_refresh": (
                 latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
             ),
+            "latest_industry_membership_snapshot_before_refresh": (
+                latest_industry_membership_snapshot.isoformat()
+                if latest_industry_membership_snapshot is not None
+                else None
+            ),
+            "latest_universe_membership_session_before_refresh": (
+                latest_universe_membership_session.isoformat()
+                if latest_universe_membership_session is not None
+                else None
+            ),
+            "universe_membership_coverage_before_refresh": universe_membership_coverage_before,
         }
 
+    bars_need_refresh = latest_local_session < expected_latest_session
+    symbol_master_needs_refresh = include_symbol_master and (
+        latest_symbol_master_snapshot is None or latest_symbol_master_snapshot < expected_latest_session
+    )
+    industry_needs_refresh = (
+        latest_industry_membership_snapshot is None
+        or latest_industry_membership_snapshot < expected_latest_session
+    )
+    universe_needs_refresh = (
+        latest_universe_membership_session is None
+        or latest_universe_membership_session < expected_latest_session
+        or not universe_membership_coverage_before.get("ok", False)
+    )
+
     refresh_start = min(latest_local_session + pd.Timedelta(days=1), expected_latest_session)
+    membership_refresh_start = None
+    if industry_needs_refresh or universe_needs_refresh:
+        membership_refresh_start = _membership_refresh_start_date(
+            storage,
+            latest_industry_membership_snapshot=latest_industry_membership_snapshot,
+            latest_universe_membership_session=latest_universe_membership_session,
+            universe_membership_coverage=universe_membership_coverage_before,
+            expected_latest_session=expected_latest_session,
+        )
     refresh_end = expected_latest_session
     try:
         result = collect_research_seed(
@@ -475,8 +520,10 @@ def maybe_refresh_silver_before_run(
             chunk_size=chunk_size,
             feed=feed,
             adjustment=adjustment,
-            include_symbol_master=include_symbol_master,
-            include_adj_factor=True,
+            include_symbol_master=symbol_master_needs_refresh,
+            include_daily_bars=bars_need_refresh,
+            include_adj_factor=bars_need_refresh,
+            membership_start_date=membership_refresh_start,
         )
     except Exception as exc:
         return {
@@ -495,19 +542,50 @@ def maybe_refresh_silver_before_run(
             "latest_symbol_master_snapshot_before_refresh": (
                 latest_symbol_master_snapshot.isoformat() if latest_symbol_master_snapshot is not None else None
             ),
+            "latest_industry_membership_snapshot_before_refresh": (
+                latest_industry_membership_snapshot.isoformat()
+                if latest_industry_membership_snapshot is not None
+                else None
+            ),
+            "latest_universe_membership_session_before_refresh": (
+                latest_universe_membership_session.isoformat()
+                if latest_universe_membership_session is not None
+                else None
+            ),
+            "membership_refresh_start_date": (
+                membership_refresh_start.isoformat() if membership_refresh_start is not None else None
+            ),
         }
 
     latest_after = _latest_local_daily_bar_session_date(storage)
     latest_symbol_master_after = _latest_local_symbol_master_snapshot_date(storage) if include_symbol_master else None
+    latest_industry_membership_after = _latest_local_industry_membership_snapshot_date(storage)
+    latest_universe_membership_after = _latest_local_universe_membership_session_date(storage)
+    universe_membership_coverage_after = _evaluate_universe_membership_coverage(
+        storage,
+        expected_latest_session=expected_latest_session,
+    )
     if not _silver_refresh_targets_met(
         latest_local_session=latest_after,
         latest_symbol_master_snapshot=latest_symbol_master_after,
+        latest_industry_membership_snapshot=latest_industry_membership_after,
+        latest_universe_membership_session=latest_universe_membership_after,
         expected_latest_session=expected_latest_session,
         include_symbol_master=include_symbol_master,
+        universe_membership_coverage=universe_membership_coverage_after,
     ):
         stale_reason = "refresh_left_silver_stale"
         if latest_after is not None and latest_after >= expected_latest_session and include_symbol_master:
             stale_reason = "refresh_left_symbol_master_stale"
+        if latest_after is not None and latest_after >= expected_latest_session:
+            if latest_industry_membership_after is None or latest_industry_membership_after < expected_latest_session:
+                stale_reason = "refresh_left_industry_membership_stale"
+            elif (
+                latest_universe_membership_after is None
+                or latest_universe_membership_after < expected_latest_session
+                or not universe_membership_coverage_after.get("ok", False)
+            ):
+                stale_reason = "refresh_left_universe_membership_stale"
         return {
             "ok": False,
             "performed": True,
@@ -526,12 +604,38 @@ def maybe_refresh_silver_before_run(
             "latest_symbol_master_snapshot_after_refresh": (
                 latest_symbol_master_after.isoformat() if latest_symbol_master_after is not None else None
             ),
+            "latest_industry_membership_snapshot_before_refresh": (
+                latest_industry_membership_snapshot.isoformat()
+                if latest_industry_membership_snapshot is not None
+                else None
+            ),
+            "latest_industry_membership_snapshot_after_refresh": (
+                latest_industry_membership_after.isoformat()
+                if latest_industry_membership_after is not None
+                else None
+            ),
+            "latest_universe_membership_session_before_refresh": (
+                latest_universe_membership_session.isoformat()
+                if latest_universe_membership_session is not None
+                else None
+            ),
+            "latest_universe_membership_session_after_refresh": (
+                latest_universe_membership_after.isoformat()
+                if latest_universe_membership_after is not None
+                else None
+            ),
+            "universe_membership_coverage_before_refresh": universe_membership_coverage_before,
+            "universe_membership_coverage_after_refresh": universe_membership_coverage_after,
+            "membership_refresh_start_date": (
+                membership_refresh_start.isoformat() if membership_refresh_start is not None else None
+            ),
             "collector": {
                 "feed": feed,
                 "adjustment": adjustment,
                 "chunk_size": chunk_size,
-                "include_symbol_master": include_symbol_master,
-                "include_adj_factor": True,
+                "include_symbol_master": symbol_master_needs_refresh,
+                "include_daily_bars": bars_need_refresh,
+                "include_adj_factor": bars_need_refresh,
             },
             "result": result,
         }
@@ -553,12 +657,38 @@ def maybe_refresh_silver_before_run(
         "latest_symbol_master_snapshot_after_refresh": (
             latest_symbol_master_after.isoformat() if latest_symbol_master_after is not None else None
         ),
+        "latest_industry_membership_snapshot_before_refresh": (
+            latest_industry_membership_snapshot.isoformat()
+            if latest_industry_membership_snapshot is not None
+            else None
+        ),
+        "latest_industry_membership_snapshot_after_refresh": (
+            latest_industry_membership_after.isoformat()
+            if latest_industry_membership_after is not None
+            else None
+        ),
+        "latest_universe_membership_session_before_refresh": (
+            latest_universe_membership_session.isoformat()
+            if latest_universe_membership_session is not None
+            else None
+        ),
+        "latest_universe_membership_session_after_refresh": (
+            latest_universe_membership_after.isoformat()
+            if latest_universe_membership_after is not None
+            else None
+        ),
+        "universe_membership_coverage_before_refresh": universe_membership_coverage_before,
+        "universe_membership_coverage_after_refresh": universe_membership_coverage_after,
+        "membership_refresh_start_date": (
+            membership_refresh_start.isoformat() if membership_refresh_start is not None else None
+        ),
         "collector": {
             "feed": feed,
             "adjustment": adjustment,
             "chunk_size": chunk_size,
-            "include_symbol_master": include_symbol_master,
-            "include_adj_factor": True,
+            "include_symbol_master": symbol_master_needs_refresh,
+            "include_daily_bars": bars_need_refresh,
+            "include_adj_factor": bars_need_refresh,
         },
         "result": result,
     }
@@ -577,14 +707,29 @@ def _silver_refresh_targets_met(
     *,
     latest_local_session: date | None,
     latest_symbol_master_snapshot: date | None,
+    latest_industry_membership_snapshot: date | None,
+    latest_universe_membership_session: date | None,
     expected_latest_session: date,
     include_symbol_master: bool,
+    universe_membership_coverage: Mapping[str, Any],
 ) -> bool:
     if latest_local_session is None or latest_local_session < expected_latest_session:
         return False
     if include_symbol_master and (
         latest_symbol_master_snapshot is None or latest_symbol_master_snapshot < expected_latest_session
     ):
+        return False
+    if (
+        latest_industry_membership_snapshot is None
+        or latest_industry_membership_snapshot < expected_latest_session
+    ):
+        return False
+    if (
+        latest_universe_membership_session is None
+        or latest_universe_membership_session < expected_latest_session
+    ):
+        return False
+    if not bool(universe_membership_coverage.get("ok", False)):
         return False
     return True
 
@@ -595,6 +740,14 @@ def _latest_local_daily_bar_session_date(storage: StorageLayout) -> date | None:
 
 def _latest_local_symbol_master_snapshot_date(storage: StorageLayout) -> date | None:
     return _latest_local_table_date(storage, table_name="symbol_master", date_column="as_of_date")
+
+
+def _latest_local_industry_membership_snapshot_date(storage: StorageLayout) -> date | None:
+    return _latest_local_table_date(storage, table_name="industry_membership", date_column="as_of_date")
+
+
+def _latest_local_universe_membership_session_date(storage: StorageLayout) -> date | None:
+    return _latest_local_table_date(storage, table_name="universe_membership", date_column="session_date")
 
 
 def _latest_local_table_date(
@@ -614,6 +767,84 @@ def _latest_local_table_date(
 
 def _expected_latest_completed_session_date(session_date: date) -> date:
     return (pd.Timestamp(session_date) - pd.offsets.BDay(1)).date()
+
+
+def _membership_refresh_start_date(
+    storage: StorageLayout,
+    *,
+    latest_industry_membership_snapshot: date | None,
+    latest_universe_membership_session: date | None,
+    universe_membership_coverage: Mapping[str, Any],
+    expected_latest_session: date,
+) -> date:
+    earliest_local_session = _earliest_local_research_session_date(storage) or expected_latest_session
+    candidate_starts: list[date] = []
+    if latest_industry_membership_snapshot is None:
+        candidate_starts.append(earliest_local_session)
+    elif latest_industry_membership_snapshot < expected_latest_session:
+        candidate_starts.append((pd.Timestamp(latest_industry_membership_snapshot) + pd.Timedelta(days=1)).date())
+
+    if latest_universe_membership_session is None:
+        candidate_starts.append(earliest_local_session)
+    elif latest_universe_membership_session < expected_latest_session:
+        candidate_starts.append((pd.Timestamp(latest_universe_membership_session) + pd.Timedelta(days=1)).date())
+
+    if (
+        not bool(universe_membership_coverage.get("ok", False))
+        and latest_universe_membership_session is not None
+        and latest_universe_membership_session >= expected_latest_session
+    ):
+        candidate_starts.append(earliest_local_session)
+
+    if not candidate_starts:
+        return expected_latest_session
+    return min(candidate_starts)
+
+
+def _earliest_local_research_session_date(storage: StorageLayout) -> date | None:
+    session_dates = _local_research_session_dates(storage, expected_latest_session=None)
+    if session_dates.empty:
+        return None
+    return session_dates.min().date()
+
+
+def _local_research_session_dates(
+    storage: StorageLayout,
+    *,
+    expected_latest_session: date | None,
+) -> pd.Index:
+    indexes: list[pd.Index] = []
+    for table_name in ("daily_bar", "benchmark_index"):
+        table = load_silver_table(table_name, layout=storage)
+        if table.empty or "session_date" not in table.columns:
+            continue
+        session_dates = pd.to_datetime(table["session_date"], errors="coerce").dropna().dt.normalize()
+        if expected_latest_session is not None:
+            session_dates = session_dates.loc[session_dates <= pd.Timestamp(expected_latest_session)]
+        if not session_dates.empty:
+            indexes.append(pd.Index(session_dates.drop_duplicates()))
+    if not indexes:
+        return pd.Index([], dtype="datetime64[ns]")
+    combined = indexes[0]
+    for index in indexes[1:]:
+        combined = combined.union(index)
+    return combined.sort_values()
+
+
+def _evaluate_universe_membership_coverage(
+    storage: StorageLayout,
+    *,
+    expected_latest_session: date,
+) -> dict[str, Any]:
+    session_dates = _local_research_session_dates(storage, expected_latest_session=expected_latest_session)
+    if session_dates.empty:
+        return {"ok": False, "reason": "missing_research_sessions", "missing_session_count": 0}
+    universe_membership = load_silver_table("universe_membership", layout=storage)
+    return assess_universe_membership_coverage(
+        session_dates=session_dates,
+        universe_membership_frame=universe_membership,
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+    )
 
 
 def summarize_paper_daily_result(
