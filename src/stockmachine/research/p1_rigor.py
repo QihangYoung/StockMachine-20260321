@@ -19,6 +19,17 @@ from stockmachine.execution import NextOpenOrderExecutionPolicy
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.portfolio import RiskAwareTopKPortfolioPolicy
 from stockmachine.research import get_default_research_protocol
+from stockmachine.research.strict_preflight import (
+    StrictResearchSourceInputs,
+    build_strict_research_preflight,
+    ensure_strict_research_preflight_ok,
+)
+from stockmachine.research.strict_reports import (
+    write_csv_artifact,
+    write_json_artifact,
+    write_model_backtest_artifacts,
+    write_summary_metrics_artifact,
+)
 from stockmachine.research.strict_frameworks import StrictFrameworkSpec, resolve_strict_framework
 from stockmachine.research.us_equities_baseline import (
     BENCHMARK_SYMBOL,
@@ -103,49 +114,6 @@ def _resolve_research_session_dates(price_data: pd.DataFrame) -> pd.Index:
         .drop_duplicates()
         .sort_values()
     )
-
-
-def _require_explicit_universe_membership_coverage(
-    session_dates: pd.Index,
-    *,
-    universe_membership_frame: pd.DataFrame,
-    universe_name: str,
-) -> None:
-    if session_dates.empty:
-        raise ValueError("Strict research bundle requires at least one research session date.")
-    if universe_membership_frame.empty:
-        raise ValueError("Strict research bundle requires explicit universe_membership history; none was found.")
-
-    membership = universe_membership_frame.copy()
-    membership["session_date"] = pd.to_datetime(membership["session_date"], errors="coerce").dt.normalize()
-    membership = membership.dropna(subset=["session_date", "symbol"]).copy()
-    membership = membership.loc[membership["universe_name"].astype(str) == universe_name].copy()
-    if membership.empty:
-        raise ValueError(
-            f"Strict research bundle requires explicit universe_membership history for universe '{universe_name}'."
-        )
-
-    membership["is_member"] = membership.get("is_member", True)
-    membership["is_member"] = membership["is_member"].fillna(True).astype(bool)
-    if "entry_date" in membership.columns:
-        membership["entry_date"] = pd.to_datetime(membership["entry_date"], errors="coerce").dt.normalize()
-    if "exit_date" in membership.columns:
-        membership["exit_date"] = pd.to_datetime(membership["exit_date"], errors="coerce").dt.normalize()
-
-    active_mask = membership["is_member"]
-    if "entry_date" in membership.columns:
-        active_mask &= membership["entry_date"].isna() | (membership["entry_date"] <= membership["session_date"])
-    if "exit_date" in membership.columns:
-        active_mask &= membership["exit_date"].isna() | (membership["exit_date"] >= membership["session_date"])
-    membership = membership.loc[active_mask].copy()
-    available_dates = pd.Index(membership["session_date"].drop_duplicates().sort_values())
-    missing_dates = pd.Index(session_dates).difference(available_dates)
-    if not missing_dates.empty:
-        preview = ", ".join(str(date.date()) for date in missing_dates[:5])
-        raise ValueError(
-            "Strict research bundle requires explicit universe_membership coverage for every research session; "
-            f"missing {len(missing_dates)} session(s), first missing: {preview}"
-        )
 
 
 def _build_repository_cache_state() -> RepositoryCacheState:
@@ -273,6 +241,7 @@ def _build_prediction_cache_signature(
     framework: StrictFrameworkSpec,
     bundle_key: str,
     predict_start: str,
+    prediction_options: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "cache_kind": "prediction",
@@ -281,6 +250,7 @@ def _build_prediction_cache_signature(
         "strategy_project": framework.strategy_project,
         "bundle_cache_key": bundle_key,
         "predict_start": str(predict_start),
+        "prediction_options": _normalize_prediction_options(prediction_options),
         "alpha_registry": _build_alpha_registry_snapshot(),
     }
 
@@ -292,6 +262,12 @@ def _make_cache_key(payload: Mapping[str, object]) -> str:
 
 def _normalize_manifest(payload: Mapping[str, object]) -> dict[str, object]:
     return json.loads(json.dumps(payload, sort_keys=True))
+
+
+def _normalize_prediction_options(payload: Mapping[str, object] | None) -> dict[str, object]:
+    if not payload:
+        return {}
+    return json.loads(json.dumps(dict(payload), sort_keys=True, default=str))
 
 
 def _strict_bundle_cache_dir(cache_dir: str | Path, bundle_key: str) -> Path:
@@ -430,10 +406,12 @@ def build_strict_research_bundle(
     predict_start: str,
     horizon: int = 5,
     strategy_project: str | None = None,
+    prediction_options: Mapping[str, object] | None = None,
     layout: StorageLayout | None = None,
     cache_dir: str | Path | None = None,
     reuse_cache: bool = True,
     rebuild_cache: bool = False,
+    source_inputs: StrictResearchSourceInputs | None = None,
 ) -> StrictResearchBundle:
     """Build one strict point-in-time research bundle once and reuse it."""
 
@@ -470,6 +448,7 @@ def build_strict_research_bundle(
                     storage=storage,
                     horizon=horizon,
                     framework=framework,
+                    source_inputs=source_inputs,
                 )
                 _write_strict_bundle_cache(
                     bundle_cache_dir,
@@ -484,6 +463,7 @@ def build_strict_research_bundle(
                 storage=storage,
                 horizon=horizon,
                 framework=framework,
+                source_inputs=source_inputs,
             )
             _write_strict_bundle_cache(
                 bundle_cache_dir,
@@ -498,6 +478,7 @@ def build_strict_research_bundle(
             storage=storage,
             horizon=horizon,
             framework=framework,
+            source_inputs=source_inputs,
         )
 
     if bundle_cache_dir is not None and bundle_cache_key is not None and repository_state.cache_allowed:
@@ -505,6 +486,7 @@ def build_strict_research_bundle(
             framework=framework,
             bundle_key=bundle_cache_key,
             predict_start=predict_start,
+            prediction_options=prediction_options,
         )
         prediction_cache_key = _make_cache_key(prediction_manifest)
         prediction_dir = _prediction_cache_dir(bundle_cache_dir, prediction_cache_key)
@@ -518,6 +500,7 @@ def build_strict_research_bundle(
                     framework=framework,
                     research_frame=research_frame,
                     predict_start=predict_start,
+                    prediction_options=prediction_options,
                 )
                 _write_prediction_cache(
                     prediction_dir,
@@ -529,6 +512,7 @@ def build_strict_research_bundle(
                 framework=framework,
                 research_frame=research_frame,
                 predict_start=predict_start,
+                prediction_options=prediction_options,
             )
             _write_prediction_cache(
                 prediction_dir,
@@ -540,6 +524,7 @@ def build_strict_research_bundle(
             framework=framework,
             research_frame=research_frame,
             predict_start=predict_start,
+            prediction_options=prediction_options,
         )
     return StrictResearchBundle(
         predict_start=predict_start,
@@ -561,15 +546,29 @@ def _build_uncached_strict_bundle_inputs(
     storage: StorageLayout,
     horizon: int,
     framework: StrictFrameworkSpec,
+    source_inputs: StrictResearchSourceInputs | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    dataset = load_us_equities_dataset(layout=storage)
-    price_data = build_price_panel_from_silver(dataset)
-    session_dates = _resolve_research_session_dates(price_data)
-    _require_explicit_universe_membership_coverage(
-        session_dates,
-        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
-        universe_name=framework.universe_name,
+    if source_inputs is None:
+        dataset = load_us_equities_dataset(layout=storage)
+        price_data = build_price_panel_from_silver(dataset)
+        source_inputs = StrictResearchSourceInputs(
+            dataset=dataset,
+            price_data=price_data,
+            session_dates=_resolve_research_session_dates(price_data),
+        )
+    preflight = build_strict_research_preflight(
+        horizon=horizon,
+        strategy_project=framework.strategy_project,
+        layout=storage,
+        source_inputs=source_inputs,
     )
+    ensure_strict_research_preflight_ok(preflight)
+    inputs = preflight.source_inputs or source_inputs
+    if inputs is None:
+        raise ValueError("Strict research preflight did not provide source inputs.")
+    dataset = inputs.dataset
+    price_data = inputs.price_data
+    session_dates = inputs.session_dates
     metadata = _build_strict_bundle_metadata(dataset, session_dates=session_dates, framework=framework)
     research_frame = _build_framework_research_frame(
         framework=framework,
@@ -628,18 +627,49 @@ def _generate_framework_predictions(
     framework: StrictFrameworkSpec,
     research_frame: pd.DataFrame,
     predict_start: str,
+    prediction_options: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
+    options = dict(prediction_options or {})
     if framework.prediction_family == "h1":
-        from stockmachine.research.h1_us_equities import generate_h1_walk_forward_predictions
-
-        return generate_h1_walk_forward_predictions(
-            research_frame,
-            predict_start=predict_start,
+        from stockmachine.research.h1_us_equities import (
+            build_h1_walk_forward_split_config,
+            generate_h1_walk_forward_predictions,
         )
+
+        split_option_keys = (
+            "train_window_days",
+            "validation_window_days",
+            "test_window_days",
+            "purge_window_days",
+            "embargo_window_days",
+            "roll_frequency",
+        )
+        split_kwargs = {
+            key: options.get(key)
+            for key in split_option_keys
+            if key in options and options.get(key) is not None
+        }
+        split_config = build_h1_walk_forward_split_config(**split_kwargs) if split_kwargs else None
+        model_names = tuple(options["model_names"]) if options.get("model_names") else None
+        generate_kwargs: dict[str, object] = {
+            "predict_start": predict_start,
+            "split_config": split_config,
+        }
+        if model_names is not None:
+            generate_kwargs["model_names"] = model_names
+
+        return generate_h1_walk_forward_predictions(research_frame, **generate_kwargs)
 
     return generate_walk_forward_predictions(
         research_frame,
         predict_start=predict_start,
+        requested_models=tuple(options["model_names"]) if options.get("model_names") else None,
+        train_window_days=options.get("train_window_days"),
+        validation_window_days=options.get("validation_window_days"),
+        test_window_days=options.get("test_window_days"),
+        purge_window_days=options.get("purge_window_days"),
+        embargo_window_days=options.get("embargo_window_days"),
+        roll_frequency=options.get("roll_frequency"),
     )
 
 
@@ -679,16 +709,13 @@ def run_model_backtest_from_bundle(
 
     if output_dir is not None:
         output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        if not records.empty:
-            records.to_csv(output_path / "backtest_records.csv", index=False)
-        else:
-            pd.DataFrame(columns=["signal_date", "entry_date", "exit_date", "gross_return", "net_return", "benchmark_return", "turnover", "cost_bps", "positions"]).to_csv(
-                output_path / "backtest_records.csv",
-                index=False,
-            )
-        pd.DataFrame([{**summary, "model": model_name}]).to_csv(output_path / "backtest_summary.csv", index=False)
-        selected_predictions.to_csv(output_path / "predictions.csv", index=False)
+        write_model_backtest_artifacts(
+            output_path,
+            model_name=model_name,
+            summary_row=summary,
+            records=records,
+            predictions=selected_predictions,
+        )
 
     return {
         "model": model_name,
@@ -820,13 +847,13 @@ def run_strict_model_sweep_from_bundle(
             )
 
     summary_frame = pd.DataFrame(rows)
-    for column in STRICT_SUMMARY_COLUMNS:
-        if column not in summary_frame.columns:
-            summary_frame[column] = None
-    summary_frame = summary_frame[[*STRICT_SUMMARY_COLUMNS, *[column for column in summary_frame.columns if column not in STRICT_SUMMARY_COLUMNS]]]
     summary_path = root / "summary_metrics.csv"
-    summary_frame.to_csv(summary_path, index=False)
-    (root / "research_protocol.json").write_text(json.dumps(protocol, indent=2, sort_keys=True), encoding="utf-8")
+    summary_frame = write_summary_metrics_artifact(
+        summary_path,
+        summary_frame,
+        ordered_columns=STRICT_SUMMARY_COLUMNS,
+    )
+    write_json_artifact(root / "research_protocol.json", protocol)
 
     return {
         "ok": bool((summary_frame["status"] == "success").all()) if not summary_frame.empty else False,
@@ -1012,7 +1039,7 @@ def run_topk_parameter_sweep_from_bundle(
 
     summary = pd.DataFrame(rows)
     summary_path = root / "summary_metrics.csv"
-    summary.to_csv(summary_path, index=False)
+    write_summary_metrics_artifact(summary_path, summary)
     return summary
 
 
@@ -1027,6 +1054,8 @@ def _build_summary_mapping(result: Any) -> dict[str, float]:
         "benchmark_total_return": result.meta.get("benchmark_total_return"),
         "mean_turnover": result.meta.get("mean_turnover"),
         "mean_cost_bps": result.meta.get("mean_cost_bps"),
+        "mean_gross_exposure": result.meta.get("mean_gross_exposure"),
+        "mean_changed_symbols": result.meta.get("mean_changed_symbols"),
     }
 
 

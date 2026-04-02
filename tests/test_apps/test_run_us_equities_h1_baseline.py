@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -88,20 +89,40 @@ def _build_dataset() -> dict[str, pd.DataFrame]:
 
 
 def test_run_us_equities_h1_baseline_writes_expected_outputs(tmp_path, monkeypatch, capsys) -> None:
-    monkeypatch.setattr(
-        "stockmachine.research.h1_us_equities.load_us_equities_dataset",
-        lambda layout=None: _build_dataset(),
-    )
-    monkeypatch.setattr(
-        "stockmachine.research.h1_us_equities.build_point_in_time_metadata_history",
-        lambda *args, **kwargs: pd.DataFrame(
-            {
-                "symbol": ["AAA", "BBB", "CCC"],
-                "sector": ["Tech", "Health", "Industrials"],
-                "industry": ["Software", "Biotech", "Machinery"],
-            }
-        ),
-    )
+    class _Preflight:
+        ok = True
+        source_inputs = object()
+
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return {"ok": True, "reasons": []}
+
+    def _run_h1_baseline_sweep(**kwargs):
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([{"model": "ridge"}, {"model": "hist_gbm"}, {"model": "extra_trees"}]).to_csv(
+            output_dir / "summary_metrics.csv",
+            index=False,
+        )
+        pd.DataFrame([{"model": "ridge"}]).to_csv(output_dir / "yearly_summary.csv", index=False)
+        pd.DataFrame([{"model": "ridge"}]).to_csv(output_dir / "cost_stress_summary.csv", index=False)
+        pd.DataFrame([{"benchmark": "spy_next_open_hold"}]).to_csv(output_dir / "benchmark_summary.csv", index=False)
+        (output_dir / "promotion_gate.json").write_text(json.dumps({"models": []}), encoding="utf-8")
+        assert kwargs["strategy_project"] == "us_equities_h1"
+        assert kwargs["source_inputs"] is _Preflight.source_inputs
+        assert kwargs["cache_dir"] is not None
+        return {
+            "ok": True,
+            "summary_metrics_path": str(output_dir / "summary_metrics.csv"),
+            "yearly_summary_path": str(output_dir / "yearly_summary.csv"),
+            "cost_stress_summary_path": str(output_dir / "cost_stress_summary.csv"),
+            "benchmark_summary_path": str(output_dir / "benchmark_summary.csv"),
+            "promotion_gate_path": str(output_dir / "promotion_gate.json"),
+            "cache": {"enabled": True, "cache_dir": str(kwargs["cache_dir"])},
+        }
+
+    monkeypatch.setattr(h1_app, "build_strict_research_preflight", lambda **kwargs: _Preflight())
+    monkeypatch.setattr(h1_app, "run_h1_baseline_sweep", _run_h1_baseline_sweep)
 
     exit_code = h1_app.main(
         [

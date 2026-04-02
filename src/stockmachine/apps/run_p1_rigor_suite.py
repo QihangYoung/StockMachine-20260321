@@ -20,6 +20,8 @@ from stockmachine.research.p1_rigor import (
     run_strict_model_sweep_from_bundle,
     run_topk_parameter_sweep_from_bundle,
 )
+from stockmachine.research.strict_preflight import build_strict_research_preflight
+from stockmachine.research.strict_reports import write_csv_artifact
 from stockmachine.research.us_equities_baseline import OverlayConfig
 
 
@@ -81,13 +83,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         sector_neutral=not args.disable_sector_neutral,
     )
 
+    preflight = build_strict_research_preflight(
+        horizon=args.horizon,
+        strategy_project=getattr(args, "strategy_project", None),
+    )
+    if not preflight.ok:
+        payload = {
+            "ok": False,
+            "predict_start": args.predict_start,
+            "horizon": args.horizon,
+            "strategy_project": workspace.project_id,
+            "strategy_workspace": workspace.to_dict(),
+            "output_root": str(output_root),
+            "preflight": preflight.to_dict(),
+            "cache": {
+                "enabled": not args.disable_cache,
+                "cache_dir": None if args.disable_cache else str(cache_dir),
+                "bundle_cache_hit": False,
+                "prediction_cache_hit": False,
+                "bundle_cache_key": None,
+                "prediction_cache_key": None,
+                "rebuild_cache": bool(args.rebuild_cache),
+            },
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
+
     bundle = build_strict_research_bundle(
         predict_start=args.predict_start,
         horizon=args.horizon,
         strategy_project=getattr(args, "strategy_project", None),
+        prediction_options={"model_names": tuple(args.models)},
         cache_dir=None if args.disable_cache else cache_dir,
         reuse_cache=not args.disable_cache,
         rebuild_cache=bool(args.rebuild_cache),
+        source_inputs=preflight.source_inputs,
     )
 
     strict_root = output_root / "strict_full"
@@ -137,13 +167,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     stability_root.mkdir(parents=True, exist_ok=True)
     yearly_summary = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else pd.DataFrame()
     quarterly_summary = pd.concat(quarterly_frames, ignore_index=True) if quarterly_frames else pd.DataFrame()
-    yearly_summary.to_csv(stability_root / "yearly_summary.csv", index=False)
-    quarterly_summary.to_csv(stability_root / "quarterly_summary.csv", index=False)
+    write_csv_artifact(stability_root / "yearly_summary.csv", yearly_summary)
+    write_csv_artifact(stability_root / "quarterly_summary.csv", quarterly_summary)
 
     cost_root = output_root / "cost_stress"
     cost_root.mkdir(parents=True, exist_ok=True)
     cost_summary = pd.concat(cost_frames, ignore_index=True) if cost_frames else pd.DataFrame()
-    cost_summary.to_csv(cost_root / "summary_metrics.csv", index=False)
+    write_csv_artifact(cost_root / "summary_metrics.csv", cost_summary)
 
     topk_root = output_root / "topk_sweep"
     topk_summary = run_topk_parameter_sweep_from_bundle(
@@ -167,6 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "stability_quarterly_path": str(stability_root / "quarterly_summary.csv"),
         "cost_stress_path": str(cost_root / "summary_metrics.csv"),
         "topk_sweep_path": str(topk_root / "summary_metrics.csv"),
+        "preflight": preflight.to_dict(),
         "counts": {
             "strict_models": int(len(strict_summary)),
             "analysis_models": int(len(analysis_models)),

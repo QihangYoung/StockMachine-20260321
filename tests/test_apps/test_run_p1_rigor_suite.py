@@ -9,6 +9,15 @@ from stockmachine.apps import run_p1_rigor_suite as p1_app
 from stockmachine.domain.project_paths import build_strategy_project_paths
 
 
+class _Preflight:
+    ok = True
+    source_inputs = None
+
+    @staticmethod
+    def to_dict() -> dict[str, object]:
+        return {"ok": True, "reasons": []}
+
+
 def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsys) -> None:
     class _Bundle:
         predict_start = "2025-01-01"
@@ -19,9 +28,11 @@ def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsy
         predict_start: str,
         horizon: int,
         strategy_project=None,
+        prediction_options=None,
         cache_dir=None,
         reuse_cache=True,
         rebuild_cache=False,
+        source_inputs=None,
     ):
         assert predict_start == "2025-01-01"
         assert horizon == 5
@@ -33,6 +44,8 @@ def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsy
         )
         assert reuse_cache is True
         assert rebuild_cache is False
+        assert prediction_options == {"model_names": ("hist_gbm",)}
+        assert source_inputs is None
         return _Bundle()
 
     def _strict_sweep(bundle, *, model_names, output_root, top_k, overlay_config):
@@ -93,6 +106,7 @@ def test_run_p1_rigor_suite_writes_expected_outputs(tmp_path, monkeypatch, capsy
         frame.to_csv(output_root / "summary_metrics.csv", index=False)
         return frame
 
+    monkeypatch.setattr(p1_app, "build_strict_research_preflight", lambda **kwargs: _Preflight())
     monkeypatch.setattr(p1_app, "build_strict_research_bundle", _build_bundle)
     monkeypatch.setattr(p1_app, "run_strict_model_sweep_from_bundle", _strict_sweep)
     monkeypatch.setattr(p1_app, "build_period_stability_summary", _stability)
@@ -123,9 +137,11 @@ def test_run_p1_rigor_suite_defaults_to_project_scoped_research_root(tmp_path, m
         predict_start: str,
         horizon: int,
         strategy_project=None,
+        prediction_options=None,
         cache_dir=None,
         reuse_cache=True,
         rebuild_cache=False,
+        source_inputs=None,
     ):
         assert predict_start == "2025-01-01"
         assert horizon == 5
@@ -133,6 +149,8 @@ def test_run_p1_rigor_suite_defaults_to_project_scoped_research_root(tmp_path, m
         assert cache_dir == workspace.research_root / "cache" / "p1_rigor_suite"
         assert reuse_cache is True
         assert rebuild_cache is False
+        assert prediction_options == {"model_names": ("hist_gbm",)}
+        assert source_inputs is None
         return _Bundle()
 
     def _strict_sweep(bundle, *, model_names, output_root, top_k, overlay_config):
@@ -191,6 +209,7 @@ def test_run_p1_rigor_suite_defaults_to_project_scoped_research_root(tmp_path, m
         frame.to_csv(output_root / "summary_metrics.csv", index=False)
         return frame
 
+    monkeypatch.setattr(p1_app, "build_strict_research_preflight", lambda **kwargs: _Preflight())
     monkeypatch.setattr(p1_app, "build_strict_research_bundle", _build_bundle)
     monkeypatch.setattr(p1_app, "run_strict_model_sweep_from_bundle", _strict_sweep)
     monkeypatch.setattr(p1_app, "build_period_stability_summary", _stability)
@@ -223,14 +242,18 @@ def test_run_p1_rigor_suite_passes_h1_strategy_project_into_bundle_builder(tmp_p
         predict_start: str,
         horizon: int,
         strategy_project=None,
+        prediction_options=None,
         cache_dir=None,
         reuse_cache=True,
         rebuild_cache=False,
+        source_inputs=None,
     ):
         assert predict_start == "2025-01-01"
         assert horizon == 1
         assert strategy_project == "us_equities_h1"
         assert cache_dir == workspace.research_root / "cache" / "p1_rigor_suite"
+        assert prediction_options == {"model_names": ("extra_trees",)}
+        assert source_inputs is None
         return _Bundle()
 
     def _strict_sweep(bundle, *, model_names, output_root, top_k, overlay_config):
@@ -289,6 +312,7 @@ def test_run_p1_rigor_suite_passes_h1_strategy_project_into_bundle_builder(tmp_p
         frame.to_csv(output_root / "summary_metrics.csv", index=False)
         return frame
 
+    monkeypatch.setattr(p1_app, "build_strict_research_preflight", lambda **kwargs: _Preflight())
     monkeypatch.setattr(p1_app, "build_strict_research_bundle", _build_bundle)
     monkeypatch.setattr(p1_app, "run_strict_model_sweep_from_bundle", _strict_sweep)
     monkeypatch.setattr(p1_app, "build_period_stability_summary", _stability)

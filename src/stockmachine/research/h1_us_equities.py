@@ -9,15 +9,28 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 
-from stockmachine.backtest import DataFrameSignalModel, DailyRebalanceOpenHoldBacktestEngine
-from stockmachine.data.loaders import load_us_equities_dataset
-from stockmachine.execution import NextOpenOrderExecutionPolicy
 from stockmachine.ingestion.storage import StorageLayout
-from stockmachine.portfolio import RiskAwareTopKPortfolioPolicy
 from stockmachine.research.builders import build_extra_trees_model, build_hist_gbm_model, prepare_model_frame
 from stockmachine.research.builders.common import build_linear_model_pipeline
-from stockmachine.research.p1_rigor import build_cost_stress_summary, build_period_stability_summary
+from stockmachine.research.p1_rigor import (
+    build_cost_stress_summary,
+    build_period_stability_summary,
+    build_strict_research_bundle,
+    run_model_backtest_from_bundle,
+)
 from stockmachine.research.protocols import get_h1_research_protocol
+from stockmachine.research.strict_frameworks import (
+    build_framework_overlay_config,
+    build_framework_promotion_gate,
+    resolve_framework_cost_stress_levels,
+    resolve_strict_framework,
+)
+from stockmachine.research.strict_preflight import StrictResearchSourceInputs
+from stockmachine.research.strict_reports import (
+    write_csv_artifact,
+    write_json_artifact,
+    write_summary_metrics_artifact,
+)
 from stockmachine.research.splitting import WalkForwardSplit, WalkForwardSplitConfig, build_walk_forward_splits
 from stockmachine.research.universe import (
     DEFAULT_RESEARCH_UNIVERSE_NAME,
@@ -263,42 +276,6 @@ def fit_predict_h1_base_model(
     return _assemble_predictions(prepared_test, np.asarray(scores), name)
 
 
-def run_h1_model_backtest(
-    *,
-    predictions: pd.DataFrame,
-    dataset: Mapping[str, pd.DataFrame],
-    top_k: int,
-    overlay_config: OverlayConfig,
-    turnover_control: H1TurnoverControlConfig,
-):
-    engine = DailyRebalanceOpenHoldBacktestEngine(
-        predictions=predictions,
-        daily_bar=dataset["daily_bar"],
-        benchmark_index=dataset["benchmark_index"],
-        signal_model=DataFrameSignalModel(predictions, horizon_bars=1),
-        portfolio_policy=RiskAwareTopKPortfolioPolicy(
-            top_k=top_k,
-            min_close=overlay_config.min_close,
-            min_median_dollar_volume_20=overlay_config.min_median_dollar_volume_20,
-            max_vol_20=overlay_config.max_vol_20,
-            max_positions_per_sector=overlay_config.max_positions_per_sector,
-            sector_neutral=overlay_config.sector_neutral,
-            hold_rank_buffer=turnover_control.hold_rank_buffer,
-            entry_rank_buffer=turnover_control.entry_rank_buffer,
-            max_new_names_per_rebalance=turnover_control.max_new_names_per_rebalance,
-        ),
-        execution_policy=NextOpenOrderExecutionPolicy(),
-        horizon_bars=1,
-        cost_bps_per_side=overlay_config.cost_bps_per_side,
-        no_trade_band=turnover_control.no_trade_band,
-        max_turnover=turnover_control.max_turnover,
-        min_weight_change=turnover_control.min_weight_change,
-    )
-    start_date = predictions["date"].min().date()
-    end_date = predictions["date"].max().date()
-    return engine.run(start_date=start_date, end_date=end_date)
-
-
 def run_h1_baseline_sweep(
     *,
     predict_start: str = "2025-01-01",
@@ -307,44 +284,50 @@ def run_h1_baseline_sweep(
     output_dir: str | Path = "artifacts/us_equities_h1_baseline",
     overlay_config: OverlayConfig | None = None,
     turnover_control: H1TurnoverControlConfig | None = None,
-    cost_levels_bps: Sequence[float] = (10.0, 15.0, 20.0, 30.0),
+    cost_levels_bps: Sequence[float] | None = None,
     gate_config: H1PromotionGateConfig | None = None,
+    strategy_project: str = "us_equities_h1",
     layout: StorageLayout | None = None,
     split_config: WalkForwardSplitConfig | None = None,
+    cache_dir: str | Path | None = None,
+    reuse_cache: bool = True,
+    rebuild_cache: bool = False,
+    source_inputs: StrictResearchSourceInputs | None = None,
 ) -> dict[str, object]:
-    config = overlay_config or OverlayConfig(cost_bps_per_side=10.0)
-    turnover = turnover_control or H1TurnoverControlConfig()
-    gate = gate_config or H1PromotionGateConfig()
+    framework = resolve_strict_framework(strategy_project=strategy_project, horizon=1)
+    config = overlay_config or build_framework_overlay_config(framework)
+    turnover = turnover_control or H1TurnoverControlConfig(**dict(framework.turnover_control_defaults))
+    gate = gate_config or H1PromotionGateConfig(**dict(framework.promotion_gate_defaults))
+    resolved_cost_levels = resolve_framework_cost_stress_levels(framework, override_levels=tuple(cost_levels_bps) if cost_levels_bps else None)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    storage = layout or StorageLayout()
-    dataset = load_us_equities_dataset(layout=storage)
-    price_data = build_price_panel_from_silver(dataset)
-    metadata = build_point_in_time_metadata_history(
-        pd.Index(price_data.loc[price_data["symbol"] != BENCHMARK_SYMBOL, "date"].drop_duplicates().sort_values()),
-        universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
-        symbol_master_frame=dataset["symbol_master"],
-        industry_membership_frame=dataset["industry_membership"],
-        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
-    )
-    research_frame = build_h1_research_frame(
-        price_data,
-        benchmark_symbol=BENCHMARK_SYMBOL,
-        symbol_metadata=metadata,
-    )
-    predictions = generate_h1_walk_forward_predictions(
-        research_frame,
+    prediction_options = {
+        "model_names": tuple(model_names),
+        "train_window_days": split_config.train_window_days if split_config is not None else None,
+        "validation_window_days": split_config.validation_window_days if split_config is not None else None,
+        "test_window_days": split_config.test_window_days if split_config is not None else None,
+        "purge_window_days": split_config.purge_window_days if split_config is not None else None,
+        "embargo_window_days": split_config.embargo_window_days if split_config is not None else None,
+        "roll_frequency": split_config.roll_frequency if split_config is not None else None,
+    }
+    bundle = build_strict_research_bundle(
         predict_start=predict_start,
-        model_names=model_names,
-        split_config=split_config,
+        horizon=1,
+        strategy_project=strategy_project,
+        prediction_options=prediction_options,
+        layout=layout or StorageLayout(),
+        cache_dir=cache_dir,
+        reuse_cache=reuse_cache,
+        rebuild_cache=rebuild_cache,
+        source_inputs=source_inputs,
     )
-    predictions.to_csv(output_path / "predictions.csv", index=False)
-    research_frame.to_csv(output_path / "research_frame.csv", index=False)
-    (output_path / "research_protocol.json").write_text(
-        json.dumps(get_h1_research_protocol().to_dict(), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    predictions = bundle.predictions.copy()
+    research_frame = bundle.research_frame.copy()
+    dataset = bundle.dataset
+    write_csv_artifact(output_path / "predictions.csv", predictions)
+    write_csv_artifact(output_path / "research_frame.csv", research_frame)
+    write_json_artifact(output_path / "research_protocol.json", get_h1_research_protocol().to_dict())
 
     rows: list[dict[str, Any]] = []
     yearly_frames: list[pd.DataFrame] = []
@@ -356,56 +339,43 @@ def run_h1_baseline_sweep(
         if selected_predictions.empty:
             continue
 
-        result = run_h1_model_backtest(
-            predictions=selected_predictions,
-            dataset=dataset,
+        result = run_model_backtest_from_bundle(
+            bundle,
+            model_name=model_name,
             top_k=top_k,
             overlay_config=config,
-            turnover_control=turnover,
+            output_dir=model_dir,
         )
-        records = pd.DataFrame(result.meta.get("records", []))
-        records.to_csv(model_dir / "backtest_records.csv", index=False)
+        records = result["records"].copy()
         summary_row = {
             "model": model_name,
-            "sessions": result.sessions,
-            "total_return": result.total_return,
-            "annualized_return": result.annualized_return,
-            "annualized_volatility": result.annualized_volatility,
-            "sharpe": result.sharpe,
-            "max_drawdown": result.max_drawdown,
-            "benchmark_total_return": result.meta.get("benchmark_total_return"),
-            "mean_turnover": result.meta.get("mean_turnover"),
-            "mean_cost_bps": result.meta.get("mean_cost_bps"),
-            "mean_gross_exposure": result.meta.get("mean_gross_exposure"),
-            "mean_changed_symbols": result.meta.get("mean_changed_symbols"),
+            **result["summary"],
             "artifacts_dir": str(model_dir),
         }
-        pd.DataFrame([summary_row]).to_csv(model_dir / "backtest_summary.csv", index=False)
         rows.append(summary_row)
         yearly_frames.append(build_period_stability_summary(records, model_name=model_name, horizon=1, period="year"))
         cost_frames.append(
-            build_cost_stress_summary(records, model_name=model_name, horizon=1, cost_levels_bps=cost_levels_bps)
+            build_cost_stress_summary(records, model_name=model_name, horizon=1, cost_levels_bps=resolved_cost_levels)
         )
 
-    summary_frame = pd.DataFrame(rows)
-    summary_frame.to_csv(output_path / "summary_metrics.csv", index=False)
+    summary_frame = write_summary_metrics_artifact(output_path / "summary_metrics.csv", rows)
     yearly_summary = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else pd.DataFrame()
-    yearly_summary.to_csv(output_path / "yearly_summary.csv", index=False)
+    write_csv_artifact(output_path / "yearly_summary.csv", yearly_summary)
     cost_summary = pd.concat(cost_frames, ignore_index=True) if cost_frames else pd.DataFrame()
-    cost_summary.to_csv(output_path / "cost_stress_summary.csv", index=False)
+    write_csv_artifact(output_path / "cost_stress_summary.csv", cost_summary)
     benchmark_summary = build_h1_benchmark_summary(predictions=predictions, benchmark_index=dataset["benchmark_index"])
-    benchmark_summary.to_csv(output_path / "benchmark_summary.csv", index=False)
+    write_csv_artifact(output_path / "benchmark_summary.csv", benchmark_summary)
 
-    gate_payload = build_h1_promotion_gate(
+    gate_payload = build_framework_promotion_gate(
+        framework,
         summary_frame=summary_frame,
         yearly_summary=yearly_summary,
         cost_summary=cost_summary,
         gate_config=gate,
     )
-    (output_path / "promotion_gate.json").write_text(
-        json.dumps(gate_payload, indent=2, sort_keys=True, default=str),
-        encoding="utf-8",
-    )
+    if gate_payload is None:
+        gate_payload = {"strategy_project": framework.strategy_project, "framework_id": framework.framework_id, "models": []}
+    write_json_artifact(output_path / "promotion_gate.json", gate_payload)
 
     return {
         "ok": not summary_frame.empty,
@@ -418,6 +388,15 @@ def run_h1_baseline_sweep(
         "research_protocol": get_h1_research_protocol().to_dict(),
         "overlay_config": asdict(config),
         "turnover_control": asdict(turnover),
+        "cache": {
+            "enabled": cache_dir is not None,
+            "cache_dir": str(cache_dir) if cache_dir is not None else None,
+            "bundle_cache_hit": bool(getattr(bundle, "bundle_cache_hit", False)),
+            "prediction_cache_hit": bool(getattr(bundle, "prediction_cache_hit", False)),
+            "bundle_cache_key": getattr(bundle, "bundle_cache_key", None),
+            "prediction_cache_key": getattr(bundle, "prediction_cache_key", None),
+            "rebuild_cache": bool(rebuild_cache),
+        },
         "promotion_gate": gate_payload,
     }
 
