@@ -100,9 +100,26 @@ class ResearchProtocol:
 
 
 DEFAULT_RESEARCH_PROTOCOL = ResearchProtocol()
+DEFAULT_H1_RESEARCH_PROTOCOL = ResearchProtocol(
+    timing=TimingProtocol(
+        exit_timestamp="open_T_plus_2",
+        holding_period_sessions=1,
+    ),
+    walk_forward=WalkForwardProtocol(
+        test_window_months=3,
+        purge_window_sessions=2,
+        embargo_window_sessions=1,
+    ),
+)
 
 
 def get_default_research_protocol() -> ResearchProtocol:
     """Return the frozen P0 research protocol."""
 
     return DEFAULT_RESEARCH_PROTOCOL
+
+
+def get_h1_research_protocol() -> ResearchProtocol:
+    """Return the frozen first-line research protocol for the h1 strategy line."""
+
+    return DEFAULT_H1_RESEARCH_PROTOCOL

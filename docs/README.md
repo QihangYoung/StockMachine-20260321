@@ -19,6 +19,8 @@
 - `research-protocol.md`: frozen P0 contract for timing, point-in-time universe, and splitter defaults
 - `regime-coverage-backtest.md`: safe historical gap-fill workflow and recommended wider bull/bear test window
 - `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
+- `h1-development-plan.md`: staged development plan for the separate `us_equities_h1` strategy line
+- `h1-research-protocol.md`: frozen first-line contract for horizon-1 US-equities research
 - `historical-universe-contract.md`: preferred P2 contract for session-scoped universe membership
 - `sequence-expert-migration-report.md`: first-pass LSTM and Transformer migration scope, dependency strategy, and strict-backtest results
 - `model-design.md`: predictive model framing and decision checklist

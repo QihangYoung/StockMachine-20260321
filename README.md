@@ -39,6 +39,9 @@ For Alpaca setup and credential checks, see [docs/alpaca-setup.md](docs/alpaca-s
 For the current strict research contract and rerun findings, see
 [docs/research-protocol.md](docs/research-protocol.md) and
 [docs/p0-research-rigor-report.md](docs/p0-research-rigor-report.md).
+For the scaffolded horizon-1 strategy line, see
+[docs/h1-development-plan.md](docs/h1-development-plan.md) and
+[docs/h1-research-protocol.md](docs/h1-research-protocol.md).
 For the first sequence-model migration pass, see
 [docs/sequence-expert-migration-report.md](docs/sequence-expert-migration-report.md).
 

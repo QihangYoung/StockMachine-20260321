@@ -18,6 +18,9 @@ class RiskAwareTopKPortfolioPolicy:
     max_vol_20: float = 0.04
     max_positions_per_sector: int = 2
     sector_neutral: bool = True
+    hold_rank_buffer: int = 0
+    entry_rank_buffer: int = 0
+    max_new_names_per_rebalance: int | None = None
 
     def build_targets(
         self,
@@ -55,15 +58,15 @@ class RiskAwareTopKPortfolioPolicy:
             adjusted.append((signal, sector, score))
 
         adjusted.sort(key=lambda item: item[2], reverse=True)
-        sector_counts: dict[str, int] = defaultdict(int)
-        selected: list[tuple[Signal, float]] = []
-        for signal, sector, score in adjusted:
-            if sector_counts[sector] >= self.max_positions_per_sector:
-                continue
-            selected.append((signal, score))
-            sector_counts[sector] += 1
-            if len(selected) >= self.top_k:
-                break
+        incumbent_symbols = {
+            str(position.symbol).upper()
+            for position in account.positions
+            if str(position.symbol).strip() and abs(float(position.weight)) > 1e-12
+        }
+        selected = self._select_candidates(
+            adjusted=adjusted,
+            incumbent_symbols=incumbent_symbols,
+        )
 
         if not selected:
             return []
@@ -80,7 +83,95 @@ class RiskAwareTopKPortfolioPolicy:
                 meta={
                     **signal.meta,
                     "adjusted_score": adjusted_score,
+                    "adjusted_rank": adjusted_rank,
+                    "selection_source": selection_source,
+                    "is_incumbent": signal.symbol.upper() in incumbent_symbols,
                 },
             )
-            for signal, adjusted_score in selected
+            for signal, adjusted_score, adjusted_rank, selection_source in selected
         ]
+
+    def _select_candidates(
+        self,
+        *,
+        adjusted: list[tuple[Signal, str, float]],
+        incumbent_symbols: set[str],
+    ) -> list[tuple[Signal, float, int, str]]:
+        ranked = [
+            (rank, signal, sector, score)
+            for rank, (signal, sector, score) in enumerate(adjusted, start=1)
+        ]
+        if not incumbent_symbols or (
+            self.hold_rank_buffer <= 0
+            and self.entry_rank_buffer <= 0
+            and self.max_new_names_per_rebalance is None
+        ):
+            return self._select_plain_top_k(ranked)
+
+        hold_rank_limit = max(self.top_k, self.top_k + max(self.hold_rank_buffer, 0))
+        entry_rank_limit = max(1, self.top_k - max(self.entry_rank_buffer, 0))
+        sector_counts: dict[str, int] = defaultdict(int)
+        selected_symbols: set[str] = set()
+        selected: list[tuple[Signal, float, int, str]] = []
+        new_entries = 0
+
+        def maybe_add(
+            *,
+            rank: int,
+            signal: Signal,
+            sector: str,
+            score: float,
+            source: str,
+            is_new_entry: bool,
+        ) -> bool:
+            nonlocal new_entries
+            symbol = signal.symbol.upper()
+            if symbol in selected_symbols:
+                return False
+            if sector_counts[sector] >= self.max_positions_per_sector:
+                return False
+            if is_new_entry and self.max_new_names_per_rebalance is not None and new_entries >= self.max_new_names_per_rebalance:
+                return False
+            selected.append((signal, score, rank, source))
+            selected_symbols.add(symbol)
+            sector_counts[sector] += 1
+            if is_new_entry:
+                new_entries += 1
+            return len(selected) >= self.top_k
+
+        passes = (
+            ("strong_entry", lambda rank, symbol: symbol not in incumbent_symbols and rank <= entry_rank_limit),
+            ("retain_buffer", lambda rank, symbol: symbol in incumbent_symbols and rank <= hold_rank_limit),
+            ("retain_fill", lambda rank, symbol: symbol in incumbent_symbols),
+            ("entry_fill", lambda rank, symbol: symbol not in incumbent_symbols),
+        )
+        for source, predicate in passes:
+            for rank, signal, sector, score in ranked:
+                symbol = signal.symbol.upper()
+                if not predicate(rank, symbol):
+                    continue
+                if maybe_add(
+                    rank=rank,
+                    signal=signal,
+                    sector=sector,
+                    score=score,
+                    source=source,
+                    is_new_entry=symbol not in incumbent_symbols,
+                ):
+                    return selected
+        return selected
+
+    def _select_plain_top_k(
+        self,
+        ranked: list[tuple[int, Signal, str, float]],
+    ) -> list[tuple[Signal, float, int, str]]:
+        sector_counts: dict[str, int] = defaultdict(int)
+        selected: list[tuple[Signal, float, int, str]] = []
+        for rank, signal, sector, score in ranked:
+            if sector_counts[sector] >= self.max_positions_per_sector:
+                continue
+            selected.append((signal, score, rank, "plain_top_k"))
+            sector_counts[sector] += 1
+            if len(selected) >= self.top_k:
+                break
+        return selected

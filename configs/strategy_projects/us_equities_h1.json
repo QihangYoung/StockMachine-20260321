@@ -8,6 +8,9 @@
   "notes": "Not production-ready. Intended for horizon-1 features, execution, turnover control, and evaluation to evolve independently from h5.",
   "entrypoints": {
     "paper_profiles_dir": "configs/strategies/h1",
-    "readme": "configs/strategies/h1/README.md"
+    "readme": "configs/strategies/h1/README.md",
+    "research_protocol_doc": "docs/h1-research-protocol.md",
+    "development_plan_doc": "docs/h1-development-plan.md",
+    "baseline_research_app": "stockmachine.apps.run_us_equities_h1_baseline"
   }
 }

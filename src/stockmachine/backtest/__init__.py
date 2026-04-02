@@ -1,5 +1,6 @@
 """Backtest engine and accounting."""
 
+from .daily_rebalance_engine import DailyRebalanceOpenHoldBacktestEngine
 from .models import DataFrameSignalModel
 from .protocols import (
     AccountSnapshot,
@@ -17,6 +18,7 @@ __all__ = [
     "AccountSnapshot",
     "BacktestEngine",
     "BacktestResult",
+    "DailyRebalanceOpenHoldBacktestEngine",
     "DailyOpenHoldBacktestEngine",
     "DataFrameSignalModel",
     "ExecutionPolicy",
