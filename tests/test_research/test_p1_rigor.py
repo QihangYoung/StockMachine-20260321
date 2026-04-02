@@ -264,6 +264,95 @@ def test_build_strict_research_bundle_requires_snapshot_and_explicit_coverage(mo
     assert list(bundle.predictions["model"]) == ["hist_gbm"]
 
 
+def test_build_strict_research_bundle_uses_h1_framework_components(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.load_us_equities_dataset",
+        lambda layout=None: _strict_bundle_dataset(include_membership=True),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_price_panel_from_silver",
+        lambda dataset: _strict_bundle_price_panel(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_point_in_time_metadata_history",
+        lambda session_dates, **kwargs: _cache_test_metadata(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_research_frame",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("h5 research frame should not be used")),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.generate_walk_forward_predictions",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("h5 predictions should not be used")),
+    )
+    def _build_h1_research_frame(price_data, **kwargs):
+        captured["research_frame_called"] = True
+        return pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2025-01-02"),
+                    "symbol": "AAPL",
+                    "sector": "Technology",
+                    "industry": "Hardware",
+                    "close": 100.0,
+                    "vol_20": 0.02,
+                    "median_dollar_volume_20": 100_000_000.0,
+                    "target": 0.01,
+                    "future_return": 0.015,
+                    "benchmark_future_return": 0.005,
+                    "gap_1": 0.01,
+                    "gap_z_20": 0.0,
+                    "intraday_return": 0.01,
+                    "ret_1d": 0.01,
+                    "ret_2d": 0.02,
+                    "mom_3": 0.03,
+                    "range_1d": 0.02,
+                    "range_5": 0.02,
+                    "vol_5": 0.02,
+                    "volume_ratio_5": 1.1,
+                    "volume_ratio_20": 1.1,
+                    "rel_ret_1d": 0.01,
+                    "rel_mom_3": 0.01,
+                    "sector_rel_ret_1d": 0.0,
+                    "sector_rel_mom_3": 0.0,
+                }
+            ]
+        )
+
+    def _generate_h1_predictions(research_frame, **kwargs):
+        captured["predictions_called"] = kwargs["predict_start"]
+        return pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2025-01-02"),
+                    "symbol": "AAPL",
+                    "model": "extra_trees",
+                    "score": 0.9,
+                    "confidence": 0.9,
+                }
+            ]
+        )
+
+    monkeypatch.setattr("stockmachine.research.h1_us_equities.build_h1_research_frame", _build_h1_research_frame)
+    monkeypatch.setattr(
+        "stockmachine.research.h1_us_equities.generate_h1_walk_forward_predictions",
+        _generate_h1_predictions,
+    )
+
+    bundle = build_strict_research_bundle(
+        predict_start="2025-01-01",
+        horizon=1,
+        strategy_project="us_equities_h1",
+    )
+
+    assert bundle.strategy_project == "us_equities_h1"
+    assert bundle.framework_id == "us_equities_h1_strict_v1"
+    assert captured["research_frame_called"] is True
+    assert captured["predictions_called"] == "2025-01-01"
+
+
 def _configure_cache_safe_identity(monkeypatch, *, silver_token: str = "silver_v1") -> None:
     monkeypatch.setattr(
         "stockmachine.research.p1_rigor._build_repository_cache_state",

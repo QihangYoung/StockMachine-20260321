@@ -84,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     bundle = build_strict_research_bundle(
         predict_start=args.predict_start,
         horizon=args.horizon,
+        strategy_project=getattr(args, "strategy_project", None),
         cache_dir=None if args.disable_cache else cache_dir,
         reuse_cache=not args.disable_cache,
         rebuild_cache=bool(args.rebuild_cache),

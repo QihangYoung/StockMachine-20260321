@@ -19,6 +19,7 @@ from stockmachine.execution import NextOpenOrderExecutionPolicy
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.portfolio import RiskAwareTopKPortfolioPolicy
 from stockmachine.research import get_default_research_protocol
+from stockmachine.research.strict_frameworks import StrictFrameworkSpec, resolve_strict_framework
 from stockmachine.research.us_equities_baseline import (
     BENCHMARK_SYMBOL,
     OverlayConfig,
@@ -27,12 +28,13 @@ from stockmachine.research.us_equities_baseline import (
     build_research_frame,
     generate_walk_forward_predictions,
 )
-from stockmachine.research.universe import DEFAULT_RESEARCH_UNIVERSE_NAME
 
 STRICT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "model",
     "status",
     "predict_start",
+    "strategy_project",
+    "framework_id",
     "top_k",
     "horizon",
     "artifacts_dir",
@@ -46,8 +48,6 @@ STRICT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "mean_turnover",
     "mean_cost_bps",
 )
-STRICT_BUNDLE_CACHE_VERSION = 1
-PREDICTION_CACHE_VERSION = 1
 STRICT_CACHE_DATASET_TABLES: tuple[str, ...] = (
     "universe_membership",
     "daily_bar",
@@ -74,6 +74,8 @@ class StrictResearchBundle:
 
     predict_start: str
     horizon: int
+    strategy_project: str
+    framework_id: str
     dataset: Mapping[str, pd.DataFrame]
     research_frame: pd.DataFrame
     predictions: pd.DataFrame
@@ -201,6 +203,14 @@ def _build_alpha_registry_snapshot() -> list[dict[str, object]]:
     return [spec.to_dict() for spec in list_alpha_experts()]
 
 
+def _framework_protocol_dict(framework: StrictFrameworkSpec) -> dict[str, object]:
+    if framework.protocol_family == "h1":
+        from stockmachine.research import get_h1_research_protocol
+
+        return get_h1_research_protocol().to_dict()
+    return get_default_research_protocol().to_dict()
+
+
 def _build_silver_input_fingerprint(layout: StorageLayout) -> dict[str, object]:
     root = layout.root.resolve()
     tables: dict[str, object] = {}
@@ -239,30 +249,36 @@ def _hash_file_contents(path: Path) -> str:
 
 def _build_bundle_cache_signature(
     *,
+    framework: StrictFrameworkSpec,
     layout: StorageLayout,
     horizon: int,
     repository_state: RepositoryCacheState,
 ) -> dict[str, object]:
     return {
         "cache_kind": "strict_bundle",
-        "cache_version": STRICT_BUNDLE_CACHE_VERSION,
+        "cache_version": framework.bundle_cache_version,
+        "framework_id": framework.framework_id,
+        "strategy_project": framework.strategy_project,
         "repository_commit": repository_state.head,
         "dependency_versions": _collect_dependency_versions(),
-        "protocol": get_default_research_protocol().to_dict(),
+        "protocol": _framework_protocol_dict(framework),
         "horizon": int(horizon),
-        "universe_name": DEFAULT_RESEARCH_UNIVERSE_NAME,
+        "universe_name": framework.universe_name,
         "silver_inputs": _build_silver_input_fingerprint(layout),
     }
 
 
 def _build_prediction_cache_signature(
     *,
+    framework: StrictFrameworkSpec,
     bundle_key: str,
     predict_start: str,
 ) -> dict[str, object]:
     return {
         "cache_kind": "prediction",
-        "cache_version": PREDICTION_CACHE_VERSION,
+        "cache_version": framework.prediction_cache_version,
+        "framework_id": framework.framework_id,
+        "strategy_project": framework.strategy_project,
         "bundle_cache_key": bundle_key,
         "predict_start": str(predict_start),
         "alpha_registry": _build_alpha_registry_snapshot(),
@@ -413,6 +429,7 @@ def build_strict_research_bundle(
     *,
     predict_start: str,
     horizon: int = 5,
+    strategy_project: str | None = None,
     layout: StorageLayout | None = None,
     cache_dir: str | Path | None = None,
     reuse_cache: bool = True,
@@ -421,6 +438,7 @@ def build_strict_research_bundle(
     """Build one strict point-in-time research bundle once and reuse it."""
 
     storage = layout or StorageLayout()
+    framework = resolve_strict_framework(strategy_project=strategy_project, horizon=horizon)
     repository_state = _build_repository_cache_state()
 
     bundle_cache_key: str | None = None
@@ -435,6 +453,7 @@ def build_strict_research_bundle(
 
     if cache_dir is not None and repository_state.cache_allowed:
         bundle_manifest = _build_bundle_cache_signature(
+            framework=framework,
             layout=storage,
             horizon=horizon,
             repository_state=repository_state,
@@ -450,6 +469,7 @@ def build_strict_research_bundle(
                 dataset, price_data, metadata, research_frame = _build_uncached_strict_bundle_inputs(
                     storage=storage,
                     horizon=horizon,
+                    framework=framework,
                 )
                 _write_strict_bundle_cache(
                     bundle_cache_dir,
@@ -463,6 +483,7 @@ def build_strict_research_bundle(
             dataset, price_data, metadata, research_frame = _build_uncached_strict_bundle_inputs(
                 storage=storage,
                 horizon=horizon,
+                framework=framework,
             )
             _write_strict_bundle_cache(
                 bundle_cache_dir,
@@ -473,10 +494,15 @@ def build_strict_research_bundle(
                 research_frame=research_frame,
             )
     else:
-        dataset, _, _, research_frame = _build_uncached_strict_bundle_inputs(storage=storage, horizon=horizon)
+        dataset, _, _, research_frame = _build_uncached_strict_bundle_inputs(
+            storage=storage,
+            horizon=horizon,
+            framework=framework,
+        )
 
     if bundle_cache_dir is not None and bundle_cache_key is not None and repository_state.cache_allowed:
         prediction_manifest = _build_prediction_cache_signature(
+            framework=framework,
             bundle_key=bundle_cache_key,
             predict_start=predict_start,
         )
@@ -488,8 +514,9 @@ def build_strict_research_bundle(
                 predictions = cached_predictions
                 prediction_cache_hit = True
             else:
-                predictions = generate_walk_forward_predictions(
-                    research_frame,
+                predictions = _generate_framework_predictions(
+                    framework=framework,
+                    research_frame=research_frame,
                     predict_start=predict_start,
                 )
                 _write_prediction_cache(
@@ -498,8 +525,9 @@ def build_strict_research_bundle(
                     predictions=predictions,
                 )
         else:
-            predictions = generate_walk_forward_predictions(
-                research_frame,
+            predictions = _generate_framework_predictions(
+                framework=framework,
+                research_frame=research_frame,
                 predict_start=predict_start,
             )
             _write_prediction_cache(
@@ -508,13 +536,16 @@ def build_strict_research_bundle(
                 predictions=predictions,
             )
     else:
-        predictions = generate_walk_forward_predictions(
-            research_frame,
+        predictions = _generate_framework_predictions(
+            framework=framework,
+            research_frame=research_frame,
             predict_start=predict_start,
         )
     return StrictResearchBundle(
         predict_start=predict_start,
         horizon=horizon,
+        strategy_project=framework.strategy_project,
+        framework_id=framework.framework_id,
         dataset=dataset,
         research_frame=research_frame,
         predictions=predictions,
@@ -529,6 +560,7 @@ def _build_uncached_strict_bundle_inputs(
     *,
     storage: StorageLayout,
     horizon: int,
+    framework: StrictFrameworkSpec,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     dataset = load_us_equities_dataset(layout=storage)
     price_data = build_price_panel_from_silver(dataset)
@@ -536,14 +568,14 @@ def _build_uncached_strict_bundle_inputs(
     _require_explicit_universe_membership_coverage(
         session_dates,
         universe_membership_frame=dataset.get("universe_membership", pd.DataFrame()),
-        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        universe_name=framework.universe_name,
     )
-    metadata = _build_strict_bundle_metadata(dataset, session_dates=session_dates)
-    research_frame = build_research_frame(
-        price_data,
-        benchmark_symbol=BENCHMARK_SYMBOL,
+    metadata = _build_strict_bundle_metadata(dataset, session_dates=session_dates, framework=framework)
+    research_frame = _build_framework_research_frame(
+        framework=framework,
+        price_data=price_data,
+        metadata=metadata,
         horizon=horizon,
-        symbol_metadata=metadata,
     )
     return dataset, price_data, metadata, research_frame
 
@@ -552,6 +584,7 @@ def _build_strict_bundle_metadata(
     dataset: Mapping[str, pd.DataFrame],
     *,
     session_dates: pd.Index | None = None,
+    framework: StrictFrameworkSpec,
 ) -> pd.DataFrame:
     if session_dates is None:
         price_data = build_price_panel_from_silver(dict(dataset))
@@ -562,7 +595,51 @@ def _build_strict_bundle_metadata(
         symbol_master_frame=dataset["symbol_master"],
         industry_membership_frame=dataset["industry_membership"],
         require_snapshot=True,
-        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        universe_name=framework.universe_name,
+    )
+
+
+def _build_framework_research_frame(
+    *,
+    framework: StrictFrameworkSpec,
+    price_data: pd.DataFrame,
+    metadata: pd.DataFrame,
+    horizon: int,
+) -> pd.DataFrame:
+    if framework.protocol_family == "h1":
+        from stockmachine.research.h1_us_equities import build_h1_research_frame
+
+        return build_h1_research_frame(
+            price_data,
+            benchmark_symbol=BENCHMARK_SYMBOL,
+            symbol_metadata=metadata,
+        )
+
+    return build_research_frame(
+        price_data,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        horizon=horizon,
+        symbol_metadata=metadata,
+    )
+
+
+def _generate_framework_predictions(
+    *,
+    framework: StrictFrameworkSpec,
+    research_frame: pd.DataFrame,
+    predict_start: str,
+) -> pd.DataFrame:
+    if framework.prediction_family == "h1":
+        from stockmachine.research.h1_us_equities import generate_h1_walk_forward_predictions
+
+        return generate_h1_walk_forward_predictions(
+            research_frame,
+            predict_start=predict_start,
+        )
+
+    return generate_walk_forward_predictions(
+        research_frame,
+        predict_start=predict_start,
     )
 
 
@@ -577,26 +654,21 @@ def run_model_backtest_from_bundle(
     """Run one backtest from a precomputed strict bundle without retraining."""
 
     config = overlay_config or OverlayConfig()
+    framework = resolve_strict_framework(
+        strategy_project=getattr(bundle, "strategy_project", None),
+        horizon=bundle.horizon,
+    )
     selected_predictions = bundle.predictions[bundle.predictions["model"] == model_name].copy()
     if selected_predictions.empty:
         raise RuntimeError(f"No predictions produced for model '{model_name}'.")
 
-    engine = DailyOpenHoldBacktestEngine(
+    engine = _build_framework_backtest_engine(
+        framework=framework,
         predictions=selected_predictions,
-        daily_bar=bundle.dataset["daily_bar"],
-        benchmark_index=bundle.dataset["benchmark_index"],
-        signal_model=DataFrameSignalModel(selected_predictions, horizon_bars=bundle.horizon),
-        portfolio_policy=RiskAwareTopKPortfolioPolicy(
-            top_k=top_k,
-            min_close=config.min_close,
-            min_median_dollar_volume_20=config.min_median_dollar_volume_20,
-            max_vol_20=config.max_vol_20,
-            max_positions_per_sector=config.max_positions_per_sector,
-            sector_neutral=config.sector_neutral,
-        ),
-        execution_policy=NextOpenOrderExecutionPolicy(),
-        horizon_bars=bundle.horizon,
-        cost_bps_per_side=config.cost_bps_per_side,
+        dataset=bundle.dataset,
+        horizon=bundle.horizon,
+        top_k=top_k,
+        overlay_config=config,
     )
 
     start_date = selected_predictions["date"].min().date()
@@ -626,6 +698,59 @@ def run_model_backtest_from_bundle(
     }
 
 
+def _build_framework_backtest_engine(
+    *,
+    framework: StrictFrameworkSpec,
+    predictions: pd.DataFrame,
+    dataset: Mapping[str, pd.DataFrame],
+    horizon: int,
+    top_k: int,
+    overlay_config: OverlayConfig,
+) -> Any:
+    portfolio_policy_kwargs = dict(
+        top_k=top_k,
+        min_close=overlay_config.min_close,
+        min_median_dollar_volume_20=overlay_config.min_median_dollar_volume_20,
+        max_vol_20=overlay_config.max_vol_20,
+        max_positions_per_sector=overlay_config.max_positions_per_sector,
+        sector_neutral=overlay_config.sector_neutral,
+    )
+
+    if framework.backtest_family == "daily_rebalance":
+        from stockmachine.backtest import DailyRebalanceOpenHoldBacktestEngine
+
+        turnover_control = dict(framework.turnover_control_defaults)
+        portfolio_policy_kwargs.update(
+            hold_rank_buffer=int(turnover_control.get("hold_rank_buffer", 0)),
+            entry_rank_buffer=int(turnover_control.get("entry_rank_buffer", 0)),
+            max_new_names_per_rebalance=turnover_control.get("max_new_names_per_rebalance"),
+        )
+        return DailyRebalanceOpenHoldBacktestEngine(
+            predictions=predictions,
+            daily_bar=dataset["daily_bar"],
+            benchmark_index=dataset["benchmark_index"],
+            signal_model=DataFrameSignalModel(predictions, horizon_bars=horizon),
+            portfolio_policy=RiskAwareTopKPortfolioPolicy(**portfolio_policy_kwargs),
+            execution_policy=NextOpenOrderExecutionPolicy(),
+            horizon_bars=horizon,
+            cost_bps_per_side=overlay_config.cost_bps_per_side,
+            no_trade_band=float(turnover_control.get("no_trade_band", 0.0)),
+            max_turnover=turnover_control.get("max_turnover"),
+            min_weight_change=float(turnover_control.get("min_weight_change", 0.0)),
+        )
+
+    return DailyOpenHoldBacktestEngine(
+        predictions=predictions,
+        daily_bar=dataset["daily_bar"],
+        benchmark_index=dataset["benchmark_index"],
+        signal_model=DataFrameSignalModel(predictions, horizon_bars=horizon),
+        portfolio_policy=RiskAwareTopKPortfolioPolicy(**portfolio_policy_kwargs),
+        execution_policy=NextOpenOrderExecutionPolicy(),
+        horizon_bars=horizon,
+        cost_bps_per_side=overlay_config.cost_bps_per_side,
+    )
+
+
 def run_strict_model_sweep_from_bundle(
     bundle: StrictResearchBundle,
     *,
@@ -639,7 +764,11 @@ def run_strict_model_sweep_from_bundle(
     config = overlay_config or OverlayConfig()
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
-    protocol = get_default_research_protocol().to_dict()
+    framework = resolve_strict_framework(
+        strategy_project=getattr(bundle, "strategy_project", None),
+        horizon=bundle.horizon,
+    )
+    protocol = _framework_protocol_dict(framework)
 
     rows: list[dict[str, Any]] = []
     for model_name in model_names:
@@ -657,6 +786,8 @@ def run_strict_model_sweep_from_bundle(
                     "model": model_name,
                     "status": "success",
                     "predict_start": bundle.predict_start,
+                    "strategy_project": framework.strategy_project,
+                    "framework_id": framework.framework_id,
                     "top_k": top_k,
                     "horizon": bundle.horizon,
                     "artifacts_dir": str(model_dir),
@@ -669,6 +800,8 @@ def run_strict_model_sweep_from_bundle(
                     "model": model_name,
                     "status": "failed",
                     "predict_start": bundle.predict_start,
+                    "strategy_project": framework.strategy_project,
+                    "framework_id": framework.framework_id,
                     "top_k": top_k,
                     "horizon": bundle.horizon,
                     "artifacts_dir": str(model_dir),
@@ -847,6 +980,10 @@ def run_topk_parameter_sweep_from_bundle(
     config = overlay_config or OverlayConfig()
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
+    framework = resolve_strict_framework(
+        strategy_project=getattr(bundle, "strategy_project", None),
+        horizon=bundle.horizon,
+    )
 
     rows: list[dict[str, Any]] = []
     for model_name in model_names:
@@ -862,6 +999,8 @@ def run_topk_parameter_sweep_from_bundle(
             rows.append(
                 {
                     "model": model_name,
+                    "strategy_project": framework.strategy_project,
+                    "framework_id": framework.framework_id,
                     "top_k": int(top_k),
                     "artifacts_dir": str(run_dir),
                     **result["summary"],

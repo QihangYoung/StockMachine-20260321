@@ -52,7 +52,7 @@ def _build_dataset() -> dict[str, pd.DataFrame]:
                 {
                     "session_date": current_date,
                     "symbol": symbol,
-                    "universe_name": "research_us_equities_v1",
+                    "universe_name": "us_equities_research_v1",
                 }
             )
 
