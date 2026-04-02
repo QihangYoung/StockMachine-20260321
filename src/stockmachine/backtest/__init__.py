@@ -13,6 +13,7 @@ from .protocols import (
     SignalModel,
 )
 from .simple_engine import DailyOpenHoldBacktestEngine
+from .staggered_engine import DailyStaggeredOpenHoldBacktestEngine
 
 __all__ = [
     "AccountSnapshot",
@@ -20,6 +21,7 @@ __all__ = [
     "BacktestResult",
     "DailyRebalanceOpenHoldBacktestEngine",
     "DailyOpenHoldBacktestEngine",
+    "DailyStaggeredOpenHoldBacktestEngine",
     "DataFrameSignalModel",
     "ExecutionPolicy",
     "MarketBar",
