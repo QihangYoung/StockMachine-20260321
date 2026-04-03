@@ -384,6 +384,94 @@ def test_run_command_fails_when_silver_refresh_cannot_reach_latest_completed_ses
     assert payload["silver_refresh"]["reason"] == "refresh_left_silver_stale"
 
 
+def test_build_paper_daily_preflight_merges_shared_research_assessment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_daily,
+        "evaluate_daily_run_governance",
+        lambda request: paper_daily.PaperDailyPreflightResult(
+            policy_allowed=True,
+            allowed=True,
+            override_used=False,
+            reasons=(),
+            healthcheck={"healthy": True, "reasons": []},
+            session_guard=None,
+            kill_switch={"active": False, "path": "x", "reason": "absent", "payload": None},
+            effective_session_date=date(2026, 3, 22),
+            data_freshness_meta={"resolution": "exact"},
+        ),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_research_data_coverage_assessment",
+        lambda **kwargs: SimpleNamespace(
+            ok=True,
+            reasons=(),
+            to_dict=lambda: {
+                "ok": True,
+                "reasons": [],
+                "research_last_session_date": "2026-03-22",
+            },
+        ),
+    )
+
+    result = paper_daily.build_paper_daily_preflight(
+        session_date=date(2026, 3, 23),
+        ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
+        data_root="data",
+        run_name="paper-demo",
+        dry_run=True,
+    )
+
+    assert result.allowed is True
+    assert result.policy_allowed is True
+    assert result.data_freshness_meta["research_data"]["ok"] is True
+
+
+def test_build_paper_daily_preflight_blocks_on_shared_research_assessment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_daily,
+        "evaluate_daily_run_governance",
+        lambda request: paper_daily.PaperDailyPreflightResult(
+            policy_allowed=True,
+            allowed=True,
+            override_used=False,
+            reasons=(),
+            healthcheck={"healthy": True, "reasons": []},
+            session_guard=None,
+            kill_switch={"active": False, "path": "x", "reason": "absent", "payload": None},
+            effective_session_date=date(2026, 3, 22),
+            data_freshness_meta={"resolution": "exact"},
+        ),
+    )
+    monkeypatch.setattr(
+        paper_daily,
+        "build_research_data_coverage_assessment",
+        lambda **kwargs: SimpleNamespace(
+            ok=False,
+            reasons=("stale_industry_membership", "universe_membership_incomplete"),
+            to_dict=lambda: {
+                "ok": False,
+                "reasons": ["stale_industry_membership", "universe_membership_incomplete"],
+            },
+        ),
+    )
+
+    result = paper_daily.build_paper_daily_preflight(
+        session_date=date(2026, 3, 23),
+        ledger_path="artifacts/paper_demo/paper_ledger.sqlite3",
+        data_root="data",
+        run_name="paper-demo",
+        dry_run=True,
+    )
+
+    assert result.policy_allowed is False
+    assert result.allowed is False
+    assert result.reasons == (
+        "research_data:stale_industry_membership",
+        "research_data:universe_membership_incomplete",
+    )
+
+
 def test_maybe_refresh_silver_before_run_refreshes_to_latest_completed_session(monkeypatch) -> None:
     observed: dict[str, object] = {}
     session_dates = iter([date(2026, 3, 20), date(2026, 3, 23)])

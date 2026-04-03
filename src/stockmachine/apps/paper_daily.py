@@ -35,6 +35,7 @@ from stockmachine.live.run_governance import (
     DailyRunGovernanceResult,
     evaluate_daily_run_governance,
 )
+from stockmachine.research.research_governance import build_research_data_coverage_assessment
 from stockmachine.research.strict_preflight import assess_universe_membership_coverage
 from stockmachine.research.universe import DEFAULT_RESEARCH_UNIVERSE_NAME
 from stockmachine.research.us_equities_baseline import OverlayConfig
@@ -388,7 +389,7 @@ def build_paper_daily_preflight(
     kill_switch_path: str | Path | None = None,
     override_unhealthy: bool = False,
 ) -> PaperDailyPreflightResult:
-    return evaluate_daily_run_governance(
+    base_result = evaluate_daily_run_governance(
         DailyRunGovernanceRequest(
             ledger_path=ledger_path,
             data_root=data_root,
@@ -400,6 +401,31 @@ def build_paper_daily_preflight(
             kill_switch_path=kill_switch_path,
             allow_unhealthy=override_unhealthy,
         )
+    )
+    expected_research_session = base_result.effective_session_date
+    if expected_research_session is None:
+        expected_research_session = _expected_latest_completed_session_date(session_date)
+    research_assessment = build_research_data_coverage_assessment(
+        layout=StorageLayout(root=Path(data_root)),
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        expected_last_session=expected_research_session,
+    )
+    research_reasons = tuple(
+        f"research_data:{reason}" for reason in research_assessment.reasons
+    )
+    policy_allowed = bool(base_result.policy_allowed and research_assessment.ok)
+    allowed = bool(policy_allowed or override_unhealthy)
+    override_used = bool(override_unhealthy and not policy_allowed)
+    merged_reasons = tuple(dict.fromkeys([*base_result.reasons, *research_reasons]))
+    merged_freshness_meta = dict(base_result.data_freshness_meta)
+    merged_freshness_meta["research_data"] = research_assessment.to_dict()
+    return replace(
+        base_result,
+        policy_allowed=policy_allowed,
+        allowed=allowed,
+        override_used=override_used,
+        reasons=merged_reasons,
+        data_freshness_meta=merged_freshness_meta,
     )
 
 
