@@ -86,3 +86,60 @@ def test_policy_max_new_names_caps_replacements_per_rebalance() -> None:
 
     assert [target.symbol for target in targets] == ["AAA", "BBB", "CCC"]
     assert sum(1 for target in targets if not target.meta["is_incumbent"]) == 1
+
+
+def test_policy_entry_score_threshold_can_leave_cash_when_too_few_candidates_pass() -> None:
+    policy = RiskAwareTopKPortfolioPolicy(
+        top_k=3,
+        max_positions_per_sector=3,
+        entry_score_threshold=0.75,
+    )
+    account = AccountSnapshot(
+        session_date=date(2025, 1, 2),
+        cash=1_000_000.0,
+        equity=1_000_000.0,
+        gross_exposure=0.0,
+        positions=(),
+    )
+    signals = [
+        _signal("AAA", 0.90, "Tech"),
+        _signal("BBB", 0.80, "Health"),
+        _signal("CCC", 0.70, "Industrials"),
+    ]
+
+    targets = policy.build_targets(date(2025, 1, 2), signals, account)
+
+    assert [target.symbol for target in targets] == ["AAA", "BBB"]
+
+
+def test_policy_hold_score_threshold_drops_incumbent_below_hold_barrier() -> None:
+    policy = RiskAwareTopKPortfolioPolicy(
+        top_k=2,
+        max_positions_per_sector=2,
+        hold_rank_buffer=2,
+        entry_rank_buffer=1,
+        max_new_names_per_rebalance=1,
+        entry_score_threshold=0.60,
+        hold_score_threshold=0.55,
+    )
+    account = AccountSnapshot(
+        session_date=date(2025, 1, 2),
+        cash=0.0,
+        equity=1_000_000.0,
+        gross_exposure=1.0,
+        positions=(
+            PositionSnapshot(symbol="BBB", quantity=100, market_value=500_000.0, weight=0.5),
+            PositionSnapshot(symbol="CCC", quantity=100, market_value=500_000.0, weight=0.5),
+        ),
+    )
+    signals = [
+        _signal("AAA", 0.95, "Tech"),
+        _signal("BBB", 0.80, "Health"),
+        _signal("CCC", 0.52, "Utilities"),
+        _signal("DDD", 0.61, "Industrials"),
+    ]
+
+    targets = policy.build_targets(date(2025, 1, 2), signals, account)
+
+    assert [target.symbol for target in targets] == ["AAA", "BBB"]
+    assert "CCC" not in [target.symbol for target in targets]

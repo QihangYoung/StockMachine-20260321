@@ -21,6 +21,8 @@ class RiskAwareTopKPortfolioPolicy:
     hold_rank_buffer: int = 0
     entry_rank_buffer: int = 0
     max_new_names_per_rebalance: int | None = None
+    entry_score_threshold: float | None = None
+    hold_score_threshold: float | None = None
 
     def build_targets(
         self,
@@ -140,15 +142,37 @@ class RiskAwareTopKPortfolioPolicy:
             return len(selected) >= self.top_k
 
         passes = (
-            ("strong_entry", lambda rank, symbol: symbol not in incumbent_symbols and rank <= entry_rank_limit),
-            ("retain_buffer", lambda rank, symbol: symbol in incumbent_symbols and rank <= hold_rank_limit),
-            ("retain_fill", lambda rank, symbol: symbol in incumbent_symbols),
-            ("entry_fill", lambda rank, symbol: symbol not in incumbent_symbols),
+            (
+                "strong_entry",
+                lambda rank, symbol, signal: (
+                    symbol not in incumbent_symbols
+                    and rank <= entry_rank_limit
+                    and self._passes_entry_threshold(signal)
+                ),
+            ),
+            (
+                "retain_buffer",
+                lambda rank, symbol, signal: (
+                    symbol in incumbent_symbols
+                    and rank <= hold_rank_limit
+                    and self._passes_hold_threshold(signal)
+                ),
+            ),
+            (
+                "retain_fill",
+                lambda rank, symbol, signal: symbol in incumbent_symbols and self._passes_hold_threshold(signal),
+            ),
+            (
+                "entry_fill",
+                lambda rank, symbol, signal: (
+                    symbol not in incumbent_symbols and self._passes_entry_threshold(signal)
+                ),
+            ),
         )
         for source, predicate in passes:
             for rank, signal, sector, score in ranked:
                 symbol = signal.symbol.upper()
-                if not predicate(rank, symbol):
+                if not predicate(rank, symbol, signal):
                     continue
                 if maybe_add(
                     rank=rank,
@@ -168,6 +192,8 @@ class RiskAwareTopKPortfolioPolicy:
         sector_counts: dict[str, int] = defaultdict(int)
         selected: list[tuple[Signal, float, int, str]] = []
         for rank, signal, sector, score in ranked:
+            if not self._passes_entry_threshold(signal):
+                continue
             if sector_counts[sector] >= self.max_positions_per_sector:
                 continue
             selected.append((signal, score, rank, "plain_top_k"))
@@ -175,3 +201,16 @@ class RiskAwareTopKPortfolioPolicy:
             if len(selected) >= self.top_k:
                 break
         return selected
+
+    def _passes_entry_threshold(self, signal: Signal) -> bool:
+        if self.entry_score_threshold is None:
+            return True
+        return float(signal.score) >= float(self.entry_score_threshold)
+
+    def _passes_hold_threshold(self, signal: Signal) -> bool:
+        threshold = self.hold_score_threshold
+        if threshold is None:
+            threshold = self.entry_score_threshold
+        if threshold is None:
+            return True
+        return float(signal.score) >= float(threshold)
