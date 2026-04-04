@@ -23,3 +23,10 @@ The current `h1` baseline uses a turnover-control v2 shell by default:
 - `entry buffer`: new names must clear a stricter rank threshold
 - `max_new_names_per_rebalance`: cap on same-day replacements
 - `min_weight_change`: small per-name weight changes are skipped
+
+The current supervised target is also frozen to a first-pass binary bucket:
+
+- task: `bucket_classification`
+- bucket count: `2`
+- label rule: positive next-session excess return vs `SPY`
+- trading score: predicted probability of the positive bucket

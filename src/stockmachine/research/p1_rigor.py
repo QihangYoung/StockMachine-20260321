@@ -655,6 +655,20 @@ def _generate_framework_predictions(
             "predict_start": predict_start,
             "split_config": split_config,
         }
+        target_option_keys = ("target_task", "bucket_count", "positive_threshold_bps")
+        target_kwargs = {
+            key: options.get(key)
+            for key in target_option_keys
+            if key in options and options.get(key) is not None
+        }
+        if target_kwargs:
+            from stockmachine.research.h1_us_equities import H1TargetConfig
+
+            generate_kwargs["target_config"] = H1TargetConfig(
+                task=str(target_kwargs.get("target_task", "bucket_classification")),
+                bucket_count=int(target_kwargs.get("bucket_count", 2)),
+                positive_threshold_bps=float(target_kwargs.get("positive_threshold_bps", 0.0)),
+            )
         if model_names is not None:
             generate_kwargs["model_names"] = model_names
 

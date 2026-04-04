@@ -111,6 +111,8 @@ def test_run_us_equities_h1_baseline_writes_expected_outputs(tmp_path, monkeypat
         assert kwargs["strategy_project"] == "us_equities_h1"
         assert kwargs["source_inputs"] is _Preflight.source_inputs
         assert kwargs["cache_dir"] is not None
+        assert kwargs["target_config"].task == "bucket_classification"
+        assert kwargs["target_config"].bucket_count == 2
         return {
             "ok": True,
             "summary_metrics_path": str(output_dir / "summary_metrics.csv"),

@@ -87,9 +87,9 @@ Expected additions:
 
 Recommended first models:
 
-- `ridge`
-- `hist_gbm`
-- `extra_trees`
+- `ridge` line as L2-regularized logistic classification
+- `hist_gbm` classifier
+- `extra_trees` classifier
 
 ### Phase 5: Cost And Stability Qualification
 

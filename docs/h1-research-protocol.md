@@ -49,15 +49,25 @@ allowing daily rebalance behavior.
 
 ## Label Definition
 
-The first h1 label is:
+The first h1 target family is:
 
-- `next_1_session_excess_return_from_next_open`
+- `bucket_classification`
 
-Definition:
+V0 starts with a binary bucket over the same continuous economic target:
 
+- continuous target = `next_1_session_excess_return_from_next_open`
 - stock return = `adj_open(T+2) / adj_open(T+1) - 1`
 - benchmark return = `SPY_open(T+2) / SPY_open(T+1) - 1`
-- target = stock return minus benchmark return
+- excess target = stock return minus benchmark return
+- bucket rule = `target_bucket_2 = 1` when excess target `> 0 bps`, else `0`
+
+Trading score semantics for the first classification pass:
+
+- `score` = predicted probability of the positive bucket
+- `confidence` = cross-sectional rank percentile of that score for the session
+
+This keeps the backtest contract aligned with the existing ranking pipeline while
+changing the supervised objective from point regression to bucket prediction.
 
 ## Universe And Point-in-Time Rules
 
@@ -156,11 +166,11 @@ Minimum cost review grid for research decisions:
 
 ## Initial Baseline Models
 
-The first h1 model pass should start with simple single-model baselines:
+The first h1 model pass should start with simple single-model classifiers:
 
-- `ridge`
-- `hist_gbm`
-- `extra_trees`
+- `ridge`: L2-regularized logistic classification over the standardized h1 feature panel
+- `hist_gbm`: histogram gradient boosting classifier
+- `extra_trees`: ExtraTrees classifier
 
 Ensembles are explicitly deferred until the first single-model h1 results show
 positive net value after realistic cost assumptions.

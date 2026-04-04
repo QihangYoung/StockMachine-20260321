@@ -13,6 +13,7 @@ from stockmachine.apps.research_paths import (
 from stockmachine.ingestion.storage import StorageLayout
 from stockmachine.research.h1_us_equities import (
     H1_BASE_MODEL_NAMES,
+    H1TargetConfig,
     H1TurnoverControlConfig,
     build_h1_walk_forward_split_config,
     run_h1_baseline_sweep,
@@ -24,6 +25,7 @@ from stockmachine.research.us_equities_baseline import OverlayConfig
 
 def build_arg_parser() -> argparse.ArgumentParser:
     framework = resolve_strict_framework(strategy_project="us_equities_h1", horizon=1)
+    prediction_defaults = dict(framework.prediction_defaults)
     turnover_defaults = dict(framework.turnover_control_defaults)
     parser = argparse.ArgumentParser(description="Run the first h1 US equities baseline sweep.")
     parser.add_argument("--predict-start", default="2025-01-01")
@@ -38,6 +40,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-positions-per-sector", type=int, default=2)
     parser.add_argument("--cost-bps-per-side", type=float, default=10.0)
     parser.add_argument("--disable-sector-neutral", action="store_true")
+    parser.add_argument("--target-task", default=str(prediction_defaults.get("target_task", "bucket_classification")))
+    parser.add_argument("--bucket-count", type=int, default=int(prediction_defaults.get("bucket_count", 2)))
+    parser.add_argument(
+        "--positive-threshold-bps",
+        type=float,
+        default=float(prediction_defaults.get("positive_threshold_bps", 0.0)),
+    )
     parser.add_argument("--no-trade-band", type=float, default=float(turnover_defaults["no_trade_band"]))
     parser.add_argument("--max-turnover", type=float, default=float(turnover_defaults["max_turnover"]))
     parser.add_argument("--min-weight-change", type=float, default=float(turnover_defaults["min_weight_change"]))
@@ -98,6 +107,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         entry_rank_buffer=args.entry_rank_buffer,
         max_new_names_per_rebalance=args.max_new_names_per_rebalance,
     )
+    target_config = H1TargetConfig(
+        task=args.target_task,
+        bucket_count=args.bucket_count,
+        positive_threshold_bps=args.positive_threshold_bps,
+    )
     split_config = build_h1_walk_forward_split_config(
         train_window_days=args.train_window_days,
         validation_window_days=args.validation_window_days,
@@ -140,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=output_root,
         overlay_config=overlay_config,
         turnover_control=turnover_control,
+        target_config=target_config,
         cost_levels_bps=cost_levels,
         strategy_project=args.strategy_project,
         layout=storage,

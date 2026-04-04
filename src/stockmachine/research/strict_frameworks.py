@@ -23,6 +23,7 @@ class StrictFrameworkSpec:
     bundle_cache_version: int = 1
     prediction_cache_version: int = 1
     overlay_defaults: Mapping[str, Any] = field(default_factory=dict)
+    prediction_defaults: Mapping[str, Any] = field(default_factory=dict)
     turnover_control_defaults: Mapping[str, Any] = field(default_factory=dict)
     cost_stress_levels: tuple[float, ...] = ()
     promotion_gate_defaults: Mapping[str, Any] = field(default_factory=dict)
@@ -66,6 +67,11 @@ _STRICT_FRAMEWORKS: dict[str, StrictFrameworkSpec] = {
             "max_positions_per_sector": 2,
             "cost_bps_per_side": 10.0,
             "sector_neutral": True,
+        },
+        prediction_defaults={
+            "target_task": "bucket_classification",
+            "bucket_count": 2,
+            "positive_threshold_bps": 0.0,
         },
         turnover_control_defaults={
             "no_trade_band": 0.05,

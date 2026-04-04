@@ -7,11 +7,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor, HistGradientBoostingClassifier, HistGradientBoostingRegressor
+from sklearn.linear_model import LogisticRegression, Ridge
 
 from stockmachine.ingestion.storage import StorageLayout
-from stockmachine.research.builders import build_extra_trees_model, build_hist_gbm_model, prepare_model_frame
-from stockmachine.research.builders.common import build_linear_model_pipeline
+from stockmachine.research.builders import prepare_model_frame
+from stockmachine.research.builders.common import build_linear_model_pipeline, build_tree_model_pipeline
 from stockmachine.research.p1_rigor import (
     build_cost_stress_summary,
     build_period_stability_summary,
@@ -80,6 +81,27 @@ class H1PromotionGateConfig:
     min_positive_year_ratio: float = 0.5
 
 
+@dataclass(slots=True, frozen=True)
+class H1TargetConfig:
+    task: str = "bucket_classification"
+    bucket_count: int = 2
+    positive_threshold_bps: float = 0.0
+
+    @property
+    def label_column(self) -> str:
+        if self.task == "point_regression":
+            return "target"
+        return _h1_bucket_label_column(self.bucket_count)
+
+    @property
+    def positive_threshold_return(self) -> float:
+        return float(self.positive_threshold_bps) / 10_000.0
+
+    @property
+    def is_classification(self) -> bool:
+        return self.task == "bucket_classification"
+
+
 def build_h1_research_frame(
     price_data: pd.DataFrame,
     *,
@@ -137,6 +159,7 @@ def build_h1_research_frame(
     panel["rel_mom_3"] = panel["mom_3"] - panel["benchmark_mom_3"]
     panel["future_return"] = group["adj_open"].shift(-2) / group["adj_open"].shift(-1) - 1.0
     panel["target"] = panel["future_return"] - panel["benchmark_future_return"]
+    panel[_h1_bucket_label_column(2)] = _build_h1_bucket_labels(panel["target"], bucket_count=2, positive_threshold_bps=0.0)
 
     if symbol_metadata is not None:
         merge_keys = ["symbol"]
@@ -163,11 +186,65 @@ def build_h1_research_frame(
     return panel
 
 
-def get_h1_model_builders() -> Mapping[str, Callable[[], object]]:
+def get_h1_model_builders(*, task: str = "bucket_classification") -> Mapping[str, Callable[[], object]]:
+    if task == "point_regression":
+        return {
+            "ridge": lambda: build_linear_model_pipeline(
+                Ridge(alpha=1.0),
+                feature_columns=H1_FEATURE_COLUMNS,
+            ),
+            "hist_gbm": lambda: build_tree_model_pipeline(
+                HistGradientBoostingRegressor(
+                    learning_rate=0.05,
+                    max_depth=4,
+                    max_iter=200,
+                    min_samples_leaf=40,
+                    random_state=7,
+                )
+            ),
+            "extra_trees": lambda: build_tree_model_pipeline(
+                ExtraTreesRegressor(
+                    bootstrap=False,
+                    max_depth=8,
+                    max_features="sqrt",
+                    min_samples_leaf=40,
+                    n_estimators=400,
+                    n_jobs=-1,
+                    random_state=7,
+                )
+            ),
+        }
+
     return {
-        "ridge": lambda: build_linear_model_pipeline(Ridge(alpha=1.0), feature_columns=H1_FEATURE_COLUMNS),
-        "hist_gbm": build_hist_gbm_model,
-        "extra_trees": build_extra_trees_model,
+        "ridge": lambda: build_linear_model_pipeline(
+            LogisticRegression(
+                C=1.0,
+                max_iter=2_000,
+                random_state=7,
+                solver="lbfgs",
+            ),
+            feature_columns=H1_FEATURE_COLUMNS,
+        ),
+        "hist_gbm": lambda: build_tree_model_pipeline(
+            HistGradientBoostingClassifier(
+                learning_rate=0.05,
+                max_depth=4,
+                max_iter=200,
+                min_samples_leaf=40,
+                random_state=7,
+            )
+        ),
+        "extra_trees": lambda: build_tree_model_pipeline(
+            ExtraTreesClassifier(
+                bootstrap=False,
+                max_depth=8,
+                max_features="sqrt",
+                min_samples_leaf=40,
+                n_estimators=400,
+                n_jobs=-1,
+                random_state=7,
+            )
+        ),
     }
 
 
@@ -197,9 +274,11 @@ def generate_h1_walk_forward_predictions(
     predict_start: str,
     model_names: Sequence[str] = H1_BASE_MODEL_NAMES,
     split_config: WalkForwardSplitConfig | None = None,
+    target_config: H1TargetConfig | None = None,
 ) -> pd.DataFrame:
     predict_start_ts = pd.Timestamp(predict_start).normalize()
     config = split_config or build_h1_walk_forward_split_config()
+    resolved_target = target_config or H1TargetConfig()
     splits = build_walk_forward_splits(panel, config=config)
 
     prediction_frames: list[pd.DataFrame] = []
@@ -215,34 +294,41 @@ def generate_h1_walk_forward_predictions(
                 model_name,
                 train_frame=train_frame,
                 test_frame=test_frame,
+                target_config=resolved_target,
             )
             prediction_frames.append(_attach_split_metadata(predictions, split))
 
     if not prediction_frames:
+        empty_columns = [
+            "date",
+            "symbol",
+            "sector",
+            "industry",
+            "close",
+            "vol_20",
+            "median_dollar_volume_20",
+            "target",
+            "future_return",
+            "benchmark_future_return",
+            "score",
+            "confidence",
+            "probability_positive",
+            "predicted_bucket",
+            "classification_confidence",
+            "model",
+            "split_fold_index",
+            "split_anchor_date",
+            "split_train_start",
+            "split_train_end",
+            "split_validation_start",
+            "split_validation_end",
+            "split_test_start",
+            "split_test_end",
+        ]
+        if resolved_target.is_classification:
+            empty_columns.insert(8, resolved_target.label_column)
         return pd.DataFrame(
-            columns=[
-                "date",
-                "symbol",
-                "sector",
-                "industry",
-                "close",
-                "vol_20",
-                "median_dollar_volume_20",
-                "target",
-                "future_return",
-                "benchmark_future_return",
-                "score",
-                "confidence",
-                "model",
-                "split_fold_index",
-                "split_anchor_date",
-                "split_train_start",
-                "split_train_end",
-                "split_validation_start",
-                "split_validation_end",
-                "split_test_start",
-                "split_test_end",
-            ]
+            columns=empty_columns
         )
 
     predictions = pd.concat(prediction_frames, ignore_index=True)
@@ -260,10 +346,12 @@ def fit_predict_h1_base_model(
     *,
     train_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
+    target_config: H1TargetConfig | None = None,
 ) -> pd.DataFrame:
     prepared_train = prepare_model_frame(train_frame)
     prepared_test = prepare_model_frame(test_frame)
-    builders = get_h1_model_builders()
+    resolved_target = target_config or H1TargetConfig()
+    builders = get_h1_model_builders(task=resolved_target.task)
     try:
         model = builders[name]()
     except KeyError as exc:
@@ -271,9 +359,23 @@ def fit_predict_h1_base_model(
 
     features_train = prepared_train[list(H1_FEATURE_COLUMNS)]
     features_test = prepared_test[list(H1_FEATURE_COLUMNS)]
-    model.fit(features_train, prepared_train["target"])
-    scores = model.predict(features_test)
-    return _assemble_predictions(prepared_test, np.asarray(scores), name)
+    if resolved_target.is_classification:
+        target_labels = _build_h1_bucket_labels(
+            prepared_train["target"],
+            bucket_count=resolved_target.bucket_count,
+            positive_threshold_bps=resolved_target.positive_threshold_bps,
+        )
+        model.fit(features_train, target_labels.astype(int))
+        scores = _predict_h1_positive_class_probability(model, features_test)
+    else:
+        model.fit(features_train, prepared_train["target"].astype(float))
+        scores = np.asarray(model.predict(features_test), dtype=float).reshape(-1)
+    return _assemble_predictions(
+        prepared_test,
+        np.asarray(scores),
+        name,
+        target_config=resolved_target,
+    )
 
 
 def run_h1_baseline_sweep(
@@ -284,6 +386,7 @@ def run_h1_baseline_sweep(
     output_dir: str | Path = "artifacts/us_equities_h1_baseline",
     overlay_config: OverlayConfig | None = None,
     turnover_control: H1TurnoverControlConfig | None = None,
+    target_config: H1TargetConfig | None = None,
     cost_levels_bps: Sequence[float] | None = None,
     gate_config: H1PromotionGateConfig | None = None,
     strategy_project: str = "us_equities_h1",
@@ -297,6 +400,7 @@ def run_h1_baseline_sweep(
     framework = resolve_strict_framework(strategy_project=strategy_project, horizon=1)
     config = overlay_config or build_framework_overlay_config(framework)
     turnover = turnover_control or H1TurnoverControlConfig(**dict(framework.turnover_control_defaults))
+    target = target_config or H1TargetConfig(**dict(framework.prediction_defaults))
     gate = gate_config or H1PromotionGateConfig(**dict(framework.promotion_gate_defaults))
     resolved_cost_levels = resolve_framework_cost_stress_levels(framework, override_levels=tuple(cost_levels_bps) if cost_levels_bps else None)
     output_path = Path(output_dir)
@@ -310,6 +414,9 @@ def run_h1_baseline_sweep(
         "purge_window_days": split_config.purge_window_days if split_config is not None else None,
         "embargo_window_days": split_config.embargo_window_days if split_config is not None else None,
         "roll_frequency": split_config.roll_frequency if split_config is not None else None,
+        "target_task": target.task,
+        "bucket_count": target.bucket_count,
+        "positive_threshold_bps": target.positive_threshold_bps,
     }
     bundle = build_strict_research_bundle(
         predict_start=predict_start,
@@ -327,7 +434,10 @@ def run_h1_baseline_sweep(
     dataset = bundle.dataset
     write_csv_artifact(output_path / "predictions.csv", predictions)
     write_csv_artifact(output_path / "research_frame.csv", research_frame)
-    write_json_artifact(output_path / "research_protocol.json", get_h1_research_protocol().to_dict())
+    research_contract = get_h1_research_protocol().to_dict()
+    research_contract["target_definition"] = asdict(target)
+    write_json_artifact(output_path / "research_protocol.json", research_contract)
+    write_json_artifact(output_path / "target_definition.json", asdict(target))
 
     rows: list[dict[str, Any]] = []
     yearly_frames: list[pd.DataFrame] = []
@@ -386,6 +496,7 @@ def run_h1_baseline_sweep(
         "benchmark_summary_path": str(output_path / "benchmark_summary.csv"),
         "promotion_gate_path": str(output_path / "promotion_gate.json"),
         "research_protocol": get_h1_research_protocol().to_dict(),
+        "target_definition": asdict(target),
         "overlay_config": asdict(config),
         "turnover_control": asdict(turnover),
         "cache": {
@@ -515,7 +626,23 @@ def build_h1_promotion_gate(
     }
 
 
-def _assemble_predictions(frame: pd.DataFrame, scores: np.ndarray, model_name: str) -> pd.DataFrame:
+def _assemble_predictions(
+    frame: pd.DataFrame,
+    scores: np.ndarray,
+    model_name: str,
+    *,
+    target_config: H1TargetConfig,
+) -> pd.DataFrame:
+    label_column = target_config.label_column
+    realized_label = (
+        _build_h1_bucket_labels(
+            frame["target"],
+            bucket_count=target_config.bucket_count,
+            positive_threshold_bps=target_config.positive_threshold_bps,
+        ).astype("Int64")
+        if target_config.is_classification
+        else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    )
     prediction_frame = frame[
         [
             "date",
@@ -530,7 +657,19 @@ def _assemble_predictions(frame: pd.DataFrame, scores: np.ndarray, model_name: s
             "benchmark_future_return",
         ]
     ].copy()
+    if target_config.is_classification:
+        prediction_frame[label_column] = realized_label.to_numpy()
     prediction_frame["score"] = scores
+    if target_config.is_classification:
+        prediction_frame["probability_positive"] = scores
+        prediction_frame["predicted_bucket"] = (scores >= 0.5).astype(int)
+        prediction_frame["classification_confidence"] = np.maximum(scores, 1.0 - scores)
+    else:
+        prediction_frame["probability_positive"] = np.nan
+        prediction_frame["predicted_bucket"] = (
+            pd.Series(scores, index=prediction_frame.index) > target_config.positive_threshold_return
+        ).astype(int)
+        prediction_frame["classification_confidence"] = np.nan
     prediction_frame["confidence"] = (
         pd.Series(scores, index=prediction_frame.index)
         .groupby(prediction_frame["date"])
@@ -595,6 +734,42 @@ def _ensure_adjusted_price_columns(frame: pd.DataFrame) -> pd.DataFrame:
     normalized["adj_open"] = normalized["open"] * normalized["price_adjust_factor"]
     normalized["adj_close"] = normalized["close"] * normalized["price_adjust_factor"]
     return normalized
+
+
+def _h1_bucket_label_column(bucket_count: int) -> str:
+    return f"target_bucket_{int(bucket_count)}"
+
+
+def _build_h1_bucket_labels(
+    target: pd.Series,
+    *,
+    bucket_count: int,
+    positive_threshold_bps: float,
+) -> pd.Series:
+    if int(bucket_count) != 2:
+        raise NotImplementedError("h1 bucket classification currently supports only 2 buckets.")
+
+    threshold = float(positive_threshold_bps) / 10_000.0
+    labels = pd.Series(pd.NA, index=target.index, dtype="Int64")
+    numeric_target = pd.to_numeric(target, errors="coerce")
+    valid_mask = numeric_target.notna()
+    labels.loc[valid_mask] = (numeric_target.loc[valid_mask] > threshold).astype(int)
+    return labels
+
+
+def _predict_h1_positive_class_probability(model: object, features_test: pd.DataFrame) -> np.ndarray:
+    if hasattr(model, "predict_proba"):
+        probabilities = np.asarray(model.predict_proba(features_test), dtype=float)
+        if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
+            return probabilities[:, 1]
+        return probabilities.reshape(-1)
+
+    if hasattr(model, "decision_function"):
+        decision = np.asarray(model.decision_function(features_test), dtype=float).reshape(-1)
+        return 1.0 / (1.0 + np.exp(-decision))
+
+    predicted = np.asarray(model.predict(features_test), dtype=float).reshape(-1)
+    return np.clip(predicted, 0.0, 1.0)
 
 
 def _annualized_sharpe(returns: pd.Series, horizon: int) -> float:

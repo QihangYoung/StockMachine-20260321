@@ -26,6 +26,8 @@ def test_framework_helpers_expose_overlay_cost_and_promotion_gate_defaults() -> 
 
     overlay = build_framework_overlay_config(h1)
     assert overlay.cost_bps_per_side == 10.0
+    assert h1.prediction_defaults["target_task"] == "bucket_classification"
+    assert h1.prediction_defaults["bucket_count"] == 2
     assert resolve_framework_cost_stress_levels(h1) == (10.0, 15.0, 20.0, 30.0)
 
     summary = pd.DataFrame(
