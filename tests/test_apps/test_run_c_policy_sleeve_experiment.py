@@ -6,9 +6,11 @@ from stockmachine.apps.run_c_policy_sleeve_experiment import (
     apply_risk_match,
     align_core_and_sleeve_records,
     build_sleeve_blend_records,
+    summarize_regime_gated_sleeve_blend,
     summarize_risk_matched_sleeve_blend,
     summarize_sleeve_blend,
 )
+from stockmachine.risk import BenchmarkTrendDrawdownRegimeDetector, RegimeGatePolicy
 
 
 def _records(net_returns: list[float], *, turnover: float = 1.0) -> pd.DataFrame:
@@ -47,6 +49,17 @@ def test_build_sleeve_blend_records_mixes_core_and_sleeve_returns() -> None:
 
     assert blended["net_return"].tolist() == [0.05, 0.07500000000000001]
     assert blended["turnover"].tolist() == [1.25, 1.25]
+
+
+def test_build_sleeve_blend_records_accepts_dynamic_weights() -> None:
+    core = _records([0.00, 0.10, 0.00])
+    sleeve = _records([0.20, 0.00, 0.20], turnover=2.0)
+    aligned = align_core_and_sleeve_records(core, sleeve)
+
+    blended = build_sleeve_blend_records(aligned, sleeve_weight=pd.Series([0.0, 0.50, 1.0]))
+
+    assert blended["net_return"].tolist() == [0.0, 0.05, 0.2]
+    assert blended["turnover"].tolist() == [1.0, 1.5, 2.0]
 
 
 def test_summarize_sleeve_blend_reports_positive_excess_when_sleeve_helps() -> None:
@@ -103,3 +116,35 @@ def test_summarize_risk_matched_sleeve_blend_includes_raw_metrics() -> None:
     assert summary["leverage_multiplier"] > 0.0
     assert "raw_sharpe" in summary
     assert "raw_annualized_volatility" in summary
+
+
+def test_summarize_regime_gated_sleeve_blend_reports_gate_metadata() -> None:
+    core = _records([0.01, 0.01, -0.02, -0.01, 0.01, 0.00])
+    sleeve = _records([0.03, 0.02, -0.04, -0.03, 0.02, 0.01])
+    aligned = align_core_and_sleeve_records(core, sleeve)
+    detector = BenchmarkTrendDrawdownRegimeDetector(trend_lookback_windows=2, drawdown_threshold=-0.01)
+    policy = RegimeGatePolicy(
+        multipliers={
+            "warmup": 1.0,
+            "bull": 1.0,
+            "correction": 0.0,
+            "bear": 0.0,
+            "rebound": 0.5,
+        }
+    )
+
+    summary, gated_alignment = summarize_regime_gated_sleeve_blend(
+        aligned,
+        sleeve_name="test_sleeve",
+        sleeve_weight=0.06,
+        horizon=5,
+        detector=detector,
+        gate_policy=policy,
+    )
+
+    assert summary["regime_gate_enabled"] is True
+    assert summary["regime_lookback_windows"] == 2
+    assert summary["regime_bull_multiplier"] == 1.0
+    assert summary["regime_rebound_multiplier"] == 0.5
+    assert summary["effective_sleeve_weight_max"] == 0.06
+    assert "regime_label" in gated_alignment.columns
