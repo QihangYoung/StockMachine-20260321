@@ -158,6 +158,52 @@ def test_fit_predict_h1_base_model_supports_feature_version_v3() -> None:
     assert predictions["predicted_bucket"].isin([0, 1]).all()
 
 
+def test_fit_predict_h1_base_model_supports_lightgbm_ranker() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=55)
+    rows = []
+    for symbol, offset in [("AAA", 0.0), ("BBB", 5.0), ("CCC", -3.0), ("DDD", 8.0), ("SPY", 2.0)]:
+        for index, current_date in enumerate(dates):
+            drift = 1.0 + offset / 100.0
+            price = 100.0 + offset + index * drift
+            rows.append(
+                {
+                    "date": current_date,
+                    "symbol": symbol,
+                    "open": price,
+                    "high": price * 1.01,
+                    "low": price * 0.99,
+                    "close": price * (1.001 + offset / 10000.0),
+                    "volume": 1_200_000.0 + index * 500 + abs(offset) * 1000,
+                    "adj_open": price,
+                    "adj_close": price * (1.001 + offset / 10000.0),
+                }
+            )
+    price_data = pd.DataFrame(rows)
+    metadata = pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB", "CCC", "DDD"],
+            "sector": ["Tech", "Health", "Industrials", "Energy"],
+            "industry": ["Software", "Biotech", "Machinery", "Services"],
+        }
+    )
+    frame = build_h1_research_frame(price_data, benchmark_symbol="SPY", symbol_metadata=metadata)
+    train_frame = frame.loc[frame["date"] < frame["date"].quantile(0.7)].copy()
+    test_frame = frame.loc[frame["date"] >= frame["date"].quantile(0.7)].copy()
+
+    predictions = fit_predict_h1_base_model(
+        "lightgbm_ranker",
+        train_frame=train_frame,
+        test_frame=test_frame,
+        target_config=H1TargetConfig(),
+        feature_version="v3",
+    )
+
+    assert not predictions.empty
+    assert np.isfinite(predictions["score"]).all()
+    assert predictions["probability_positive"].isna().all()
+    assert predictions["predicted_bucket"].isin([0, 1]).all()
+
+
 def test_fit_predict_h1_base_model_supports_point_regression() -> None:
     dates = pd.bdate_range("2025-01-01", periods=55)
     rows = []

@@ -11,8 +11,12 @@ from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor, HistGrad
 from sklearn.linear_model import LogisticRegression, Ridge
 
 from stockmachine.ingestion.storage import StorageLayout
-from stockmachine.research.builders import prepare_model_frame
-from stockmachine.research.builders.common import build_linear_model_pipeline, build_tree_model_pipeline
+from stockmachine.research.builders import build_lightgbm_ranker, prepare_model_frame
+from stockmachine.research.builders.common import (
+    build_linear_model_pipeline,
+    build_query_group_sizes,
+    build_tree_model_pipeline,
+)
 from stockmachine.research.p1_rigor import (
     build_cost_stress_summary,
     build_period_stability_summary,
@@ -298,6 +302,7 @@ def get_h1_model_builders(
                     random_state=7,
                 )
             ),
+            "lightgbm_ranker": lambda: build_lightgbm_ranker(feature_columns=feature_columns),
         }
 
     return {
@@ -330,6 +335,7 @@ def get_h1_model_builders(
                 random_state=7,
             )
         ),
+        "lightgbm_ranker": lambda: build_lightgbm_ranker(feature_columns=feature_columns),
     }
 
 
@@ -448,6 +454,23 @@ def fit_predict_h1_base_model(
 
     features_train = prepared_train[list(feature_columns)]
     features_test = prepared_test[list(feature_columns)]
+    if _is_h1_ranker_model(name):
+        group_sizes = build_query_group_sizes(prepared_train)
+        if resolved_target.is_classification:
+            # Keep the h1 economic target bucketed for evaluation, but let the ranker
+            # learn a cleaner within-date ordering from the continuous excess return.
+            rank_targets = prepared_train["target"].astype(float)
+        else:
+            rank_targets = prepared_train["target"].astype(float)
+        model.fit(features_train, rank_targets, group=group_sizes)
+        scores = np.asarray(model.predict(features_test), dtype=float).reshape(-1)
+        return _assemble_predictions(
+            prepared_test,
+            scores,
+            name,
+            target_config=resolved_target,
+            score_semantics="rank_score",
+        )
     if resolved_target.is_classification:
         target_labels = _build_h1_bucket_labels(
             prepared_train["target"],
@@ -464,6 +487,7 @@ def fit_predict_h1_base_model(
         np.asarray(scores),
         name,
         target_config=resolved_target,
+        score_semantics="probability" if resolved_target.is_classification else "regression",
     )
 
 
@@ -733,6 +757,7 @@ def _assemble_predictions(
     model_name: str,
     *,
     target_config: H1TargetConfig,
+    score_semantics: str = "probability",
 ) -> pd.DataFrame:
     label_column = target_config.label_column
     realized_label = (
@@ -761,10 +786,20 @@ def _assemble_predictions(
     if target_config.is_classification:
         prediction_frame[label_column] = realized_label.to_numpy()
     prediction_frame["score"] = scores
-    if target_config.is_classification:
+    if target_config.is_classification and score_semantics == "probability":
         prediction_frame["probability_positive"] = scores
         prediction_frame["predicted_bucket"] = (scores >= 0.5).astype(int)
         prediction_frame["classification_confidence"] = np.maximum(scores, 1.0 - scores)
+    elif target_config.is_classification:
+        ranked_scores = (
+            pd.Series(scores, index=prediction_frame.index)
+            .groupby(prediction_frame["date"])
+            .rank(pct=True)
+            .to_numpy()
+        )
+        prediction_frame["probability_positive"] = np.nan
+        prediction_frame["predicted_bucket"] = (ranked_scores >= 0.5).astype(int)
+        prediction_frame["classification_confidence"] = np.nan
     else:
         prediction_frame["probability_positive"] = np.nan
         prediction_frame["predicted_bucket"] = (
@@ -779,6 +814,10 @@ def _assemble_predictions(
     )
     prediction_frame["model"] = model_name
     return prediction_frame
+
+
+def _is_h1_ranker_model(name: str) -> bool:
+    return name == "lightgbm_ranker"
 
 
 def _attach_split_metadata(frame: pd.DataFrame, split: WalkForwardSplit) -> pd.DataFrame:
