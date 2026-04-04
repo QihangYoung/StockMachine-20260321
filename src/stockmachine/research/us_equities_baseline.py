@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -110,6 +110,19 @@ class OverlayConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class ModelWhiteboxOverride:
+    """Per-model override for the risk-aware whitebox overlay."""
+
+    top_k: int | None = None
+    min_close: float | None = None
+    min_median_dollar_volume_20: float | None = None
+    max_vol_20: float | None = None
+    max_positions_per_sector: int | None = None
+    cost_bps_per_side: float | None = None
+    sector_neutral: bool | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class OverlayPeriodMetrics:
     """Summary metrics for the risk-aware and cost-aware strategy overlay."""
 
@@ -131,6 +144,66 @@ class OverlayPeriodMetrics:
     mean_cost_bps: float
     mean_names_held: float
     mean_max_sector_weight: float
+
+
+MODEL_WHITEBOX_OVERRIDES: dict[str, ModelWhiteboxOverride] = {
+    "extra_trees": ModelWhiteboxOverride(
+        top_k=8,
+        min_median_dollar_volume_20=30_000_000.0,
+        max_vol_20=0.04,
+    ),
+    "hist_gbm": ModelWhiteboxOverride(
+        top_k=10,
+        min_median_dollar_volume_20=50_000_000.0,
+        max_vol_20=0.04,
+    ),
+    "lightgbm_ranker": ModelWhiteboxOverride(
+        top_k=10,
+        min_median_dollar_volume_20=30_000_000.0,
+        max_vol_20=0.05,
+    ),
+}
+
+
+def resolve_model_whitebox_policy(
+    name: str,
+    *,
+    top_k: int,
+    overlay_config: OverlayConfig,
+) -> tuple[int, OverlayConfig]:
+    """Resolve the whitebox overlay settings for one model."""
+
+    override = MODEL_WHITEBOX_OVERRIDES.get(name)
+    if override is None:
+        return int(top_k), overlay_config
+
+    routed_top_k = int(override.top_k if override.top_k is not None else top_k)
+    routed_config = replace(
+        overlay_config,
+        min_close=override.min_close if override.min_close is not None else overlay_config.min_close,
+        min_median_dollar_volume_20=(
+            override.min_median_dollar_volume_20
+            if override.min_median_dollar_volume_20 is not None
+            else overlay_config.min_median_dollar_volume_20
+        ),
+        max_vol_20=override.max_vol_20 if override.max_vol_20 is not None else overlay_config.max_vol_20,
+        max_positions_per_sector=(
+            override.max_positions_per_sector
+            if override.max_positions_per_sector is not None
+            else overlay_config.max_positions_per_sector
+        ),
+        cost_bps_per_side=(
+            override.cost_bps_per_side
+            if override.cost_bps_per_side is not None
+            else overlay_config.cost_bps_per_side
+        ),
+        sector_neutral=(
+            override.sector_neutral
+            if override.sector_neutral is not None
+            else overlay_config.sector_neutral
+        ),
+    )
+    return routed_top_k, routed_config
 
 
 def run_baseline_experiment(
@@ -234,28 +307,51 @@ def run_risk_aware_experiment(
     for model_name in MODEL_NAMES:
         model_predictions = model_frames[model_name]
         period_frames = slice_frame_by_windows(model_predictions, comparison_windows)
+        routed_top_k, routed_config = resolve_model_whitebox_policy(
+            model_name,
+            top_k=top_k,
+            overlay_config=config,
+        )
         raw_evaluation[model_name] = {
-            window.name: evaluate_predictions(period_frames[window.name], top_k=top_k, horizon=horizon)
+            window.name: evaluate_predictions(period_frames[window.name], top_k=routed_top_k, horizon=horizon)
             for window in comparison_windows
         }
         validation_metrics, validation_selection = evaluate_overlay_predictions(
             period_frames["validation"],
-            top_k=top_k,
+            top_k=routed_top_k,
             horizon=horizon,
-            overlay_config=config,
+            overlay_config=routed_config,
         )
         test_metrics, test_selection = evaluate_overlay_predictions(
             period_frames["test"],
-            top_k=top_k,
+            top_k=routed_top_k,
             horizon=horizon,
-            overlay_config=config,
+            overlay_config=routed_config,
         )
         overlay_evaluation[model_name] = {
             "validation": validation_metrics,
             "test": test_metrics,
         }
-        selection_frames.append(validation_selection.assign(model=model_name, period="validation"))
-        selection_frames.append(test_selection.assign(model=model_name, period="test"))
+        selection_frames.append(
+            validation_selection.assign(
+                model=model_name,
+                period="validation",
+                requested_top_k=int(top_k),
+                effective_top_k=routed_top_k,
+                effective_min_median_dollar_volume_20=routed_config.min_median_dollar_volume_20,
+                effective_max_vol_20=routed_config.max_vol_20,
+            )
+        )
+        selection_frames.append(
+            test_selection.assign(
+                model=model_name,
+                period="test",
+                requested_top_k=int(top_k),
+                effective_top_k=routed_top_k,
+                effective_min_median_dollar_volume_20=routed_config.min_median_dollar_volume_20,
+                effective_max_vol_20=routed_config.max_vol_20,
+            )
+        )
 
     save_risk_aware_artifacts(
         output_dir=output_path,
@@ -322,22 +418,28 @@ def run_silver_chain_backtest(
     if selected_predictions.empty:
         raise RuntimeError(f"No predictions produced for model '{model_name}'.")
 
+    effective_top_k, effective_config = resolve_model_whitebox_policy(
+        model_name,
+        top_k=top_k,
+        overlay_config=config,
+    )
+
     engine = DailyOpenHoldBacktestEngine(
         predictions=selected_predictions,
         daily_bar=dataset["daily_bar"],
         benchmark_index=dataset["benchmark_index"],
         signal_model=DataFrameSignalModel(selected_predictions, horizon_bars=horizon),
         portfolio_policy=RiskAwareTopKPortfolioPolicy(
-            top_k=top_k,
-            min_close=config.min_close,
-            min_median_dollar_volume_20=config.min_median_dollar_volume_20,
-            max_vol_20=config.max_vol_20,
-            max_positions_per_sector=config.max_positions_per_sector,
-            sector_neutral=config.sector_neutral,
+            top_k=effective_top_k,
+            min_close=effective_config.min_close,
+            min_median_dollar_volume_20=effective_config.min_median_dollar_volume_20,
+            max_vol_20=effective_config.max_vol_20,
+            max_positions_per_sector=effective_config.max_positions_per_sector,
+            sector_neutral=effective_config.sector_neutral,
         ),
         execution_policy=NextOpenOrderExecutionPolicy(),
         horizon_bars=horizon,
-        cost_bps_per_side=config.cost_bps_per_side,
+        cost_bps_per_side=effective_config.cost_bps_per_side,
     )
 
     start_date = selected_predictions["date"].min().date()
@@ -362,7 +464,9 @@ def run_silver_chain_backtest(
 
     return {
         "model": model_name,
-        "overlay_config": asdict(config),
+        "requested_top_k": int(top_k),
+        "effective_top_k": effective_top_k,
+        "overlay_config": asdict(effective_config),
         "summary": {
             "sessions": result.sessions,
             "total_return": result.total_return,

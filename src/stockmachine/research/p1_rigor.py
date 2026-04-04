@@ -38,6 +38,7 @@ from stockmachine.research.us_equities_baseline import (
     build_price_panel_from_silver,
     build_research_frame,
     generate_walk_forward_predictions,
+    resolve_model_whitebox_policy,
 )
 
 STRICT_SUMMARY_COLUMNS: tuple[str, ...] = (
@@ -46,9 +47,13 @@ STRICT_SUMMARY_COLUMNS: tuple[str, ...] = (
     "predict_start",
     "strategy_project",
     "framework_id",
+    "requested_top_k",
     "top_k",
     "horizon",
     "artifacts_dir",
+    "route_model_whitebox",
+    "effective_min_median_dollar_volume_20",
+    "effective_max_vol_20",
     "sessions",
     "total_return",
     "annualized_return",
@@ -693,11 +698,20 @@ def run_model_backtest_from_bundle(
     model_name: str,
     top_k: int = 10,
     overlay_config: OverlayConfig | None = None,
+    route_model_whitebox: bool = True,
     output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one backtest from a precomputed strict bundle without retraining."""
 
     config = overlay_config or OverlayConfig()
+    effective_top_k = int(top_k)
+    effective_config = config
+    if route_model_whitebox:
+        effective_top_k, effective_config = resolve_model_whitebox_policy(
+            model_name,
+            top_k=top_k,
+            overlay_config=config,
+        )
     framework = resolve_strict_framework(
         strategy_project=getattr(bundle, "strategy_project", None),
         horizon=bundle.horizon,
@@ -711,8 +725,8 @@ def run_model_backtest_from_bundle(
         predictions=selected_predictions,
         dataset=bundle.dataset,
         horizon=bundle.horizon,
-        top_k=top_k,
-        overlay_config=config,
+        top_k=effective_top_k,
+        overlay_config=effective_config,
     )
 
     start_date = selected_predictions["date"].min().date()
@@ -733,6 +747,10 @@ def run_model_backtest_from_bundle(
 
     return {
         "model": model_name,
+        "requested_top_k": int(top_k),
+        "effective_top_k": effective_top_k,
+        "effective_overlay_config": effective_config,
+        "route_model_whitebox": bool(route_model_whitebox),
         "summary": summary,
         "records": records,
         "artifacts_dir": str(Path(output_dir)) if output_dir is not None else None,
@@ -799,6 +817,7 @@ def run_strict_model_sweep_from_bundle(
     output_root: str | Path,
     top_k: int = 10,
     overlay_config: OverlayConfig | None = None,
+    route_model_whitebox: bool = True,
 ) -> dict[str, Any]:
     """Run one strict sweep over many models while reusing the same predictions."""
 
@@ -820,8 +839,10 @@ def run_strict_model_sweep_from_bundle(
                 model_name=model_name,
                 top_k=top_k,
                 overlay_config=config,
+                route_model_whitebox=route_model_whitebox,
                 output_dir=model_dir,
             )
+            effective_config = result["effective_overlay_config"]
             rows.append(
                 {
                     "model": model_name,
@@ -829,9 +850,13 @@ def run_strict_model_sweep_from_bundle(
                     "predict_start": bundle.predict_start,
                     "strategy_project": framework.strategy_project,
                     "framework_id": framework.framework_id,
-                    "top_k": top_k,
+                    "requested_top_k": int(top_k),
+                    "top_k": int(result["effective_top_k"]),
                     "horizon": bundle.horizon,
                     "artifacts_dir": str(model_dir),
+                    "route_model_whitebox": bool(route_model_whitebox),
+                    "effective_min_median_dollar_volume_20": effective_config.min_median_dollar_volume_20,
+                    "effective_max_vol_20": effective_config.max_vol_20,
                     **result["summary"],
                 }
             )
@@ -843,9 +868,13 @@ def run_strict_model_sweep_from_bundle(
                     "predict_start": bundle.predict_start,
                     "strategy_project": framework.strategy_project,
                     "framework_id": framework.framework_id,
-                    "top_k": top_k,
+                    "requested_top_k": int(top_k),
+                    "top_k": int(top_k),
                     "horizon": bundle.horizon,
                     "artifacts_dir": str(model_dir),
+                    "route_model_whitebox": bool(route_model_whitebox),
+                    "effective_min_median_dollar_volume_20": None,
+                    "effective_max_vol_20": None,
                     "sessions": None,
                     "total_return": None,
                     "annualized_return": None,
@@ -1035,6 +1064,7 @@ def run_topk_parameter_sweep_from_bundle(
                 model_name=model_name,
                 top_k=int(top_k),
                 overlay_config=config,
+                route_model_whitebox=False,
                 output_dir=run_dir,
             )
             rows.append(
