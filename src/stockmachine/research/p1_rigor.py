@@ -676,6 +676,8 @@ def _generate_framework_predictions(
             )
         if model_names is not None:
             generate_kwargs["model_names"] = model_names
+        if options.get("feature_version") is not None:
+            generate_kwargs["feature_version"] = str(options["feature_version"])
 
         return generate_h1_walk_forward_predictions(research_frame, **generate_kwargs)
 
@@ -699,6 +701,7 @@ def run_model_backtest_from_bundle(
     top_k: int = 10,
     overlay_config: OverlayConfig | None = None,
     route_model_whitebox: bool = True,
+    turnover_control_overrides: Mapping[str, Any] | None = None,
     output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one backtest from a precomputed strict bundle without retraining."""
@@ -727,6 +730,7 @@ def run_model_backtest_from_bundle(
         horizon=bundle.horizon,
         top_k=effective_top_k,
         overlay_config=effective_config,
+        turnover_control_overrides=turnover_control_overrides,
     )
 
     start_date = selected_predictions["date"].min().date()
@@ -765,6 +769,7 @@ def _build_framework_backtest_engine(
     horizon: int,
     top_k: int,
     overlay_config: OverlayConfig,
+    turnover_control_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     portfolio_policy_kwargs = dict(
         top_k=top_k,
@@ -779,6 +784,14 @@ def _build_framework_backtest_engine(
         from stockmachine.backtest import DailyRebalanceOpenHoldBacktestEngine
 
         turnover_control = dict(framework.turnover_control_defaults)
+        if turnover_control_overrides:
+            turnover_control.update(
+                {
+                    key: value
+                    for key, value in turnover_control_overrides.items()
+                    if value is not None
+                }
+            )
         portfolio_policy_kwargs.update(
             hold_rank_buffer=int(turnover_control.get("hold_rank_buffer", 0)),
             entry_rank_buffer=int(turnover_control.get("entry_rank_buffer", 0)),

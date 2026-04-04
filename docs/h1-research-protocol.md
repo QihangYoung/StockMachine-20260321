@@ -53,13 +53,14 @@ The first h1 target family is:
 
 - `bucket_classification`
 
-V0 starts with a binary bucket over the same continuous economic target:
+The current working default uses a binary bucket over the same continuous
+economic target:
 
 - continuous target = `next_1_session_excess_return_from_next_open`
 - stock return = `adj_open(T+2) / adj_open(T+1) - 1`
 - benchmark return = `SPY_open(T+2) / SPY_open(T+1) - 1`
 - excess target = stock return minus benchmark return
-- bucket rule = `target_bucket_2 = 1` when excess target `> 0 bps`, else `0`
+- bucket rule = `target_bucket_2 = 1` when excess target `> 20 bps`, else `0`
 
 Trading score semantics for the first classification pass:
 
@@ -123,6 +124,17 @@ Allowed first-wave feature families:
 - recent range, ATR proxy, and realized volatility
 - abnormal volume and volume acceleration
 - benchmark-relative and sector-relative short-horizon strength
+
+Current preferred feature bundle for the h1 mainline is `feature_version=v3`:
+
+- base daily-bar h1 panel
+- benchmark context features
+- risk-scaled short-horizon features
+
+The following experimental families are not part of the default v3 bundle:
+
+- candle-shape features
+- sector intraday-relative extensions
 
 Deferred for later phases:
 

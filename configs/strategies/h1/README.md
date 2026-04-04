@@ -28,5 +28,11 @@ The current supervised target is also frozen to a first-pass binary bucket:
 
 - task: `bucket_classification`
 - bucket count: `2`
-- label rule: positive next-session excess return vs `SPY`
+- label rule: next-session excess return vs `SPY` greater than `20 bps`
 - trading score: predicted probability of the positive bucket
+
+The current default feature set is `feature_version=v3`:
+
+- base h1 daily-bar features
+- benchmark-context additions
+- risk-scaled short-horizon additions

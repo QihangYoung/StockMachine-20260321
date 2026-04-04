@@ -42,6 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-sector-neutral", action="store_true")
     parser.add_argument("--target-task", default=str(prediction_defaults.get("target_task", "bucket_classification")))
     parser.add_argument("--bucket-count", type=int, default=int(prediction_defaults.get("bucket_count", 2)))
+    parser.add_argument("--feature-version", default=str(prediction_defaults.get("feature_version", "v1")))
     parser.add_argument(
         "--positive-threshold-bps",
         type=float,
@@ -163,6 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         reuse_cache=not args.disable_cache,
         rebuild_cache=bool(args.rebuild_cache),
         source_inputs=preflight.source_inputs,
+        feature_version=args.feature_version,
     )
     payload["strategy_project"] = workspace.project_id
     payload["strategy_workspace"] = workspace.to_dict()

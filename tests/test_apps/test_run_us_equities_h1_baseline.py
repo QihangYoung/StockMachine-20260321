@@ -113,6 +113,7 @@ def test_run_us_equities_h1_baseline_writes_expected_outputs(tmp_path, monkeypat
         assert kwargs["cache_dir"] is not None
         assert kwargs["target_config"].task == "bucket_classification"
         assert kwargs["target_config"].bucket_count == 2
+        assert kwargs["feature_version"] == "v2"
         return {
             "ok": True,
             "summary_metrics_path": str(output_dir / "summary_metrics.csv"),
@@ -134,6 +135,8 @@ def test_run_us_equities_h1_baseline_writes_expected_outputs(tmp_path, monkeypat
             "2",
             "--output-root",
             str(tmp_path / "h1"),
+            "--feature-version",
+            "v2",
             "--train-window-days",
             "40",
             "--validation-window-days",

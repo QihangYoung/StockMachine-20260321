@@ -39,7 +39,7 @@ from stockmachine.research.universe import (
 )
 from stockmachine.research.us_equities_baseline import BENCHMARK_SYMBOL, OverlayConfig, build_price_panel_from_silver
 
-H1_FEATURE_COLUMNS: tuple[str, ...] = (
+H1_FEATURE_COLUMNS_V1: tuple[str, ...] = (
     "gap_1",
     "gap_z_20",
     "intraday_return",
@@ -57,6 +57,40 @@ H1_FEATURE_COLUMNS: tuple[str, ...] = (
     "sector_rel_ret_1d",
     "sector_rel_mom_3",
 )
+H1_FEATURE_FAMILY_BENCHMARK_CONTEXT: tuple[str, ...] = (
+    "benchmark_gap_1",
+    "rel_gap_1",
+    "rel_intraday_return",
+)
+H1_FEATURE_FAMILY_RISK_SCALED: tuple[str, ...] = (
+    "gap_to_vol_20",
+    "ret_1d_to_vol_20",
+    "true_range_1d",
+    "atr_5",
+    "downside_vol_20",
+)
+H1_FEATURE_FAMILY_CANDLE_SHAPE: tuple[str, ...] = (
+    "range_position_1d",
+    "body_to_range_1d",
+)
+H1_FEATURE_FAMILY_SECTOR_INTRADAY: tuple[str, ...] = (
+    "sector_rel_gap_1",
+    "sector_rel_intraday_return",
+)
+H1_FEATURE_COLUMNS_V2: tuple[str, ...] = (
+    H1_FEATURE_COLUMNS_V1
+    + H1_FEATURE_FAMILY_BENCHMARK_CONTEXT
+    + H1_FEATURE_FAMILY_RISK_SCALED
+    + H1_FEATURE_FAMILY_CANDLE_SHAPE
+    + H1_FEATURE_FAMILY_SECTOR_INTRADAY
+)
+H1_FEATURE_COLUMNS_V3: tuple[str, ...] = (
+    H1_FEATURE_COLUMNS_V1
+    + H1_FEATURE_FAMILY_BENCHMARK_CONTEXT
+    + H1_FEATURE_FAMILY_RISK_SCALED
+)
+H1_DEFAULT_FEATURE_VERSION = "v3"
+H1_FEATURE_COLUMNS: tuple[str, ...] = H1_FEATURE_COLUMNS_V3
 
 H1_BASE_MODEL_NAMES: tuple[str, ...] = ("ridge", "hist_gbm", "extra_trees")
 TRADING_DAYS_PER_MONTH = 21
@@ -102,6 +136,17 @@ class H1TargetConfig:
         return self.task == "bucket_classification"
 
 
+def resolve_h1_feature_columns(feature_version: str = H1_DEFAULT_FEATURE_VERSION) -> tuple[str, ...]:
+    normalized = str(feature_version).strip().lower()
+    if normalized == "v1":
+        return H1_FEATURE_COLUMNS_V1
+    if normalized == "v2":
+        return H1_FEATURE_COLUMNS_V2
+    if normalized == "v3":
+        return H1_FEATURE_COLUMNS_V3
+    raise ValueError(f"Unsupported h1 feature_version '{feature_version}'. Expected one of: v1, v2, v3.")
+
+
 def build_h1_research_frame(
     price_data: pd.DataFrame,
     *,
@@ -120,6 +165,7 @@ def build_h1_research_frame(
     benchmark["benchmark_ret_1d"] = benchmark["benchmark_close"].pct_change(1, fill_method=None)
     benchmark["benchmark_mom_3"] = benchmark["benchmark_close"].pct_change(3, fill_method=None)
     benchmark["benchmark_gap_1"] = benchmark["benchmark_open"] / benchmark["benchmark_prev_close"] - 1.0
+    benchmark["benchmark_intraday_return"] = benchmark["benchmark_close"] / benchmark["benchmark_open"] - 1.0
     benchmark["benchmark_future_return"] = (
         benchmark["benchmark_adj_open"].shift(-2) / benchmark["benchmark_adj_open"].shift(-1) - 1.0
     )
@@ -127,6 +173,11 @@ def build_h1_research_frame(
     panel = price_data.loc[price_data["symbol"] != benchmark_symbol].copy()
     panel = panel.merge(
         benchmark[["date", "benchmark_ret_1d", "benchmark_mom_3", "benchmark_gap_1", "benchmark_future_return"]],
+        on="date",
+        how="left",
+    )
+    panel = panel.merge(
+        benchmark[["date", "benchmark_intraday_return"]],
         on="date",
         how="left",
     )
@@ -157,6 +208,24 @@ def build_h1_research_frame(
     panel["volume_ratio_20"] = panel["volume"] / group["volume"].rolling(20).mean().reset_index(level=0, drop=True)
     panel["rel_ret_1d"] = panel["ret_1d"] - panel["benchmark_ret_1d"]
     panel["rel_mom_3"] = panel["mom_3"] - panel["benchmark_mom_3"]
+    panel["rel_gap_1"] = panel["gap_1"] - panel["benchmark_gap_1"]
+    panel["rel_intraday_return"] = panel["intraday_return"] - panel["benchmark_intraday_return"]
+    panel["gap_to_vol_20"] = _safe_divide(panel["gap_1"], panel["vol_20"])
+    panel["ret_1d_to_vol_20"] = _safe_divide(panel["ret_1d"], panel["vol_20"])
+    day_range = (panel["high"] - panel["low"]).replace(0.0, np.nan)
+    panel["range_position_1d"] = (((panel["close"] - panel["low"]) / day_range) - 0.5).fillna(0.0) * 2.0
+    panel["body_to_range_1d"] = ((panel["close"] - panel["open"]) / day_range).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    true_range = pd.concat(
+        [
+            (panel["high"] - panel["low"]).abs(),
+            (panel["high"] - panel["prev_close"]).abs(),
+            (panel["low"] - panel["prev_close"]).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    panel["true_range_1d"] = _safe_divide(true_range, panel["prev_close"])
+    panel["atr_5"] = group["true_range_1d"].rolling(5).mean().reset_index(level=0, drop=True)
+    negative_ret_sq = panel["ret_1d"].clip(upper=0.0).pow(2)
     panel["future_return"] = group["adj_open"].shift(-2) / group["adj_open"].shift(-1) - 1.0
     panel["target"] = panel["future_return"] - panel["benchmark_future_return"]
     panel[_h1_bucket_label_column(2)] = _build_h1_bucket_labels(panel["target"], bucket_count=2, positive_threshold_bps=0.0)
@@ -178,20 +247,36 @@ def build_h1_research_frame(
     sector_group = panel.groupby(["date", "sector"], group_keys=False)
     panel["sector_rel_ret_1d"] = panel["ret_1d"] - sector_group["ret_1d"].transform("mean")
     panel["sector_rel_mom_3"] = panel["mom_3"] - sector_group["mom_3"].transform("mean")
+    panel["sector_rel_gap_1"] = panel["gap_1"] - sector_group["gap_1"].transform("mean")
+    panel["sector_rel_intraday_return"] = panel["intraday_return"] - sector_group["intraday_return"].transform("mean")
 
-    required_columns = list(H1_FEATURE_COLUMNS)
+    downside_vol_20 = (
+        negative_ret_sq.groupby(panel["symbol"])
+        .rolling(20)
+        .mean()
+        .reset_index(level=0, drop=True)
+        .pow(0.5)
+    )
+    panel["downside_vol_20"] = downside_vol_20
+
+    required_columns = list(H1_FEATURE_COLUMNS_V2)
     if drop_unlabeled_rows:
         required_columns += ["future_return", "target"]
     panel = panel.dropna(subset=required_columns).reset_index(drop=True)
     return panel
 
 
-def get_h1_model_builders(*, task: str = "bucket_classification") -> Mapping[str, Callable[[], object]]:
+def get_h1_model_builders(
+    *,
+    task: str = "bucket_classification",
+    feature_version: str = H1_DEFAULT_FEATURE_VERSION,
+) -> Mapping[str, Callable[[], object]]:
+    feature_columns = resolve_h1_feature_columns(feature_version)
     if task == "point_regression":
         return {
             "ridge": lambda: build_linear_model_pipeline(
                 Ridge(alpha=1.0),
-                feature_columns=H1_FEATURE_COLUMNS,
+                feature_columns=feature_columns,
             ),
             "hist_gbm": lambda: build_tree_model_pipeline(
                 HistGradientBoostingRegressor(
@@ -223,7 +308,7 @@ def get_h1_model_builders(*, task: str = "bucket_classification") -> Mapping[str
                 random_state=7,
                 solver="lbfgs",
             ),
-            feature_columns=H1_FEATURE_COLUMNS,
+            feature_columns=feature_columns,
         ),
         "hist_gbm": lambda: build_tree_model_pipeline(
             HistGradientBoostingClassifier(
@@ -275,6 +360,7 @@ def generate_h1_walk_forward_predictions(
     model_names: Sequence[str] = H1_BASE_MODEL_NAMES,
     split_config: WalkForwardSplitConfig | None = None,
     target_config: H1TargetConfig | None = None,
+    feature_version: str = H1_DEFAULT_FEATURE_VERSION,
 ) -> pd.DataFrame:
     predict_start_ts = pd.Timestamp(predict_start).normalize()
     config = split_config or build_h1_walk_forward_split_config()
@@ -295,6 +381,7 @@ def generate_h1_walk_forward_predictions(
                 train_frame=train_frame,
                 test_frame=test_frame,
                 target_config=resolved_target,
+                feature_version=feature_version,
             )
             prediction_frames.append(_attach_split_metadata(predictions, split))
 
@@ -347,18 +434,20 @@ def fit_predict_h1_base_model(
     train_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
     target_config: H1TargetConfig | None = None,
+    feature_version: str = H1_DEFAULT_FEATURE_VERSION,
 ) -> pd.DataFrame:
     prepared_train = prepare_model_frame(train_frame)
     prepared_test = prepare_model_frame(test_frame)
     resolved_target = target_config or H1TargetConfig()
-    builders = get_h1_model_builders(task=resolved_target.task)
+    feature_columns = resolve_h1_feature_columns(feature_version)
+    builders = get_h1_model_builders(task=resolved_target.task, feature_version=feature_version)
     try:
         model = builders[name]()
     except KeyError as exc:
         raise ValueError(f"Unsupported h1 model '{name}'.") from exc
 
-    features_train = prepared_train[list(H1_FEATURE_COLUMNS)]
-    features_test = prepared_test[list(H1_FEATURE_COLUMNS)]
+    features_train = prepared_train[list(feature_columns)]
+    features_test = prepared_test[list(feature_columns)]
     if resolved_target.is_classification:
         target_labels = _build_h1_bucket_labels(
             prepared_train["target"],
@@ -396,11 +485,20 @@ def run_h1_baseline_sweep(
     reuse_cache: bool = True,
     rebuild_cache: bool = False,
     source_inputs: StrictResearchSourceInputs | None = None,
+    feature_version: str = H1_DEFAULT_FEATURE_VERSION,
 ) -> dict[str, object]:
     framework = resolve_strict_framework(strategy_project=strategy_project, horizon=1)
     config = overlay_config or build_framework_overlay_config(framework)
     turnover = turnover_control or H1TurnoverControlConfig(**dict(framework.turnover_control_defaults))
-    target = target_config or H1TargetConfig(**dict(framework.prediction_defaults))
+    if target_config is None:
+        prediction_defaults = dict(framework.prediction_defaults)
+        target = H1TargetConfig(
+            task=str(prediction_defaults.get("target_task", "bucket_classification")),
+            bucket_count=int(prediction_defaults.get("bucket_count", 2)),
+            positive_threshold_bps=float(prediction_defaults.get("positive_threshold_bps", 0.0)),
+        )
+    else:
+        target = target_config
     gate = gate_config or H1PromotionGateConfig(**dict(framework.promotion_gate_defaults))
     resolved_cost_levels = resolve_framework_cost_stress_levels(framework, override_levels=tuple(cost_levels_bps) if cost_levels_bps else None)
     output_path = Path(output_dir)
@@ -417,6 +515,7 @@ def run_h1_baseline_sweep(
         "target_task": target.task,
         "bucket_count": target.bucket_count,
         "positive_threshold_bps": target.positive_threshold_bps,
+        "feature_version": feature_version,
     }
     bundle = build_strict_research_bundle(
         predict_start=predict_start,
@@ -454,6 +553,7 @@ def run_h1_baseline_sweep(
             model_name=model_name,
             top_k=top_k,
             overlay_config=config,
+            turnover_control_overrides=asdict(turnover),
             output_dir=model_dir,
         )
         records = result["records"].copy()
@@ -497,6 +597,7 @@ def run_h1_baseline_sweep(
         "promotion_gate_path": str(output_path / "promotion_gate.json"),
         "research_protocol": get_h1_research_protocol().to_dict(),
         "target_definition": asdict(target),
+        "feature_version": feature_version,
         "overlay_config": asdict(config),
         "turnover_control": asdict(turnover),
         "cache": {
@@ -797,3 +898,8 @@ def _max_drawdown_from_returns(returns: pd.Series) -> float:
     peaks = equity.cummax()
     drawdowns = equity / peaks - 1.0
     return float(drawdowns.min())
+
+
+def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    quotient = numerator / denominator.replace(0.0, np.nan)
+    return quotient.replace([np.inf, -np.inf], np.nan).fillna(0.0)

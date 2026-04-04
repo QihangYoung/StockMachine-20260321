@@ -5,9 +5,11 @@ import pytest
 
 from stockmachine.research.p1_rigor import (
     RepositoryCacheState,
+    StrictResearchBundle,
     build_cost_stress_summary,
     build_period_stability_summary,
     build_strict_research_bundle,
+    run_model_backtest_from_bundle,
     summarize_backtest_records,
 )
 
@@ -95,6 +97,69 @@ def test_build_cost_stress_summary_emits_one_row_per_cost_level() -> None:
     assert list(summary["cost_bps_per_side"]) == [10.0, 20.0, 40.0]
     assert (summary["model"] == "hist_gbm").all()
     assert "excess_total_return" in summary.columns
+
+
+def test_run_model_backtest_from_bundle_forwards_turnover_control_overrides(monkeypatch) -> None:
+    bundle = StrictResearchBundle(
+        predict_start="2025-01-01",
+        horizon=1,
+        strategy_project="us_equities_h1",
+        framework_id="us_equities_h1_strict_v1",
+        dataset={"daily_bar": pd.DataFrame(), "benchmark_index": pd.DataFrame()},
+        research_frame=pd.DataFrame(),
+        predictions=pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2025-01-02"),
+                    "symbol": "AAPL",
+                    "model": "ridge",
+                    "score": 0.9,
+                    "confidence": 0.8,
+                }
+            ]
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeEngine:
+        def run(self, start_date, end_date):
+            return type(
+                "Result",
+                (),
+                {
+                    "sessions": 1,
+                    "total_return": 0.01,
+                    "annualized_return": 0.01,
+                    "annualized_volatility": 0.1,
+                    "sharpe": 0.5,
+                    "max_drawdown": -0.1,
+                    "meta": {
+                        "benchmark_total_return": 0.0,
+                        "mean_turnover": 0.2,
+                        "mean_cost_bps": 2.0,
+                        "mean_gross_exposure": 1.0,
+                        "mean_changed_symbols": 1.0,
+                        "records": [],
+                    },
+                },
+            )()
+
+    def _build_framework_backtest_engine(**kwargs):
+        captured["turnover_control_overrides"] = kwargs.get("turnover_control_overrides")
+        return _FakeEngine()
+
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor._build_framework_backtest_engine",
+        _build_framework_backtest_engine,
+    )
+
+    run_model_backtest_from_bundle(
+        bundle,
+        model_name="ridge",
+        turnover_control_overrides={"no_trade_band": 0.07, "max_turnover": 0.5},
+    )
+
+    assert captured["turnover_control_overrides"] == {"no_trade_band": 0.07, "max_turnover": 0.5}
 
 
 def _strict_bundle_price_panel() -> pd.DataFrame:
@@ -323,6 +388,7 @@ def test_build_strict_research_bundle_uses_h1_framework_components(monkeypatch) 
 
     def _generate_h1_predictions(research_frame, **kwargs):
         captured["predictions_called"] = kwargs["predict_start"]
+        captured["feature_version"] = kwargs.get("feature_version")
         return pd.DataFrame(
             [
                 {
@@ -345,12 +411,14 @@ def test_build_strict_research_bundle_uses_h1_framework_components(monkeypatch) 
         predict_start="2025-01-01",
         horizon=1,
         strategy_project="us_equities_h1",
+        prediction_options={"feature_version": "v2"},
     )
 
     assert bundle.strategy_project == "us_equities_h1"
     assert bundle.framework_id == "us_equities_h1_strict_v1"
     assert captured["research_frame_called"] is True
     assert captured["predictions_called"] == "2025-01-01"
+    assert captured["feature_version"] == "v2"
 
 
 def _configure_cache_safe_identity(monkeypatch, *, silver_token: str = "silver_v1") -> None:

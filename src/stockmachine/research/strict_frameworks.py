@@ -72,6 +72,7 @@ _STRICT_FRAMEWORKS: dict[str, StrictFrameworkSpec] = {
             "target_task": "bucket_classification",
             "bucket_count": 2,
             "positive_threshold_bps": 0.0,
+            "feature_version": "v3",
         },
         turnover_control_defaults={
             "no_trade_band": 0.05,

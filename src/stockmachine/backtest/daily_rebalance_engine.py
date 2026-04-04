@@ -157,6 +157,7 @@ class DailyRebalanceOpenHoldBacktestEngine:
 
         action_flags: list[str] = []
         candidate_weights = dict(raw_weights)
+        target_position_limit = len(raw_weights)
         if self.max_turnover is not None and raw_turnover > self.max_turnover and raw_turnover > 0:
             scale = float(self.max_turnover / raw_turnover)
             blended: dict[str, float] = {}
@@ -172,9 +173,21 @@ class DailyRebalanceOpenHoldBacktestEngine:
         thresholded_weights, skipped_small_deltas = self._apply_min_weight_change(previous_weights, candidate_weights)
         if skipped_small_deltas > 0:
             action_flags.append("skip_small_weight_deltas")
-        normalized_weights, normalized = self._normalize_gross_exposure(
+        limited_weights, dropped_symbols = self._enforce_position_limit(
             thresholded_weights,
-            target_gross_exposure=float(sum(candidate_weights.values())),
+            raw_weights=raw_weights,
+            max_positions=target_position_limit,
+        )
+        if dropped_symbols > 0:
+            action_flags.append("enforce_position_limit")
+        target_gross_exposure = float(sum(candidate_weights.values()))
+        if dropped_symbols > 0:
+            # Keep pruned residuals as cash instead of recycling them back into
+            # the remaining names, which would hide the true support reduction.
+            target_gross_exposure = float(sum(limited_weights.values()))
+        normalized_weights, normalized = self._normalize_gross_exposure(
+            limited_weights,
+            target_gross_exposure=target_gross_exposure,
         )
         if normalized:
             action_flags.append("normalize_gross_exposure")
@@ -225,6 +238,31 @@ class DailyRebalanceOpenHoldBacktestEngine:
             if abs(weight * scale) > 1e-12
         }
         return normalized, True
+
+    def _enforce_position_limit(
+        self,
+        weights: dict[str, float],
+        *,
+        raw_weights: dict[str, float],
+        max_positions: int,
+    ) -> tuple[dict[str, float], int]:
+        if max_positions <= 0:
+            return {}, len(weights)
+        if len(weights) <= max_positions:
+            return dict(weights), 0
+
+        ranked = sorted(
+            weights.items(),
+            key=lambda item: (
+                abs(item[1]),
+                1 if item[0] in raw_weights else 0,
+                item[0],
+            ),
+            reverse=True,
+        )
+        kept = dict(ranked[:max_positions])
+        dropped = len(ranked) - len(kept)
+        return kept, dropped
 
     def _build_bar_lookup(self, frame: pd.DataFrame) -> dict[date, dict[str, MarketBar]]:
         lookup: dict[date, dict[str, MarketBar]] = {}
