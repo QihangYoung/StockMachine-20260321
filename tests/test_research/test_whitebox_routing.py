@@ -37,7 +37,7 @@ def test_resolve_model_whitebox_policy_uses_known_overrides() -> None:
     top_k, config = resolve_model_whitebox_policy("lightgbm_ranker", top_k=8, overlay_config=base)
     assert top_k == 10
     assert config.min_median_dollar_volume_20 == 30_000_000.0
-    assert config.max_vol_20 == 0.05
+    assert config.max_vol_20 == 0.065
 
     top_k, config = resolve_model_whitebox_policy("ridge", top_k=9, overlay_config=base)
     assert top_k == 9

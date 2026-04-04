@@ -160,7 +160,7 @@ MODEL_WHITEBOX_OVERRIDES: dict[str, ModelWhiteboxOverride] = {
     "lightgbm_ranker": ModelWhiteboxOverride(
         top_k=10,
         min_median_dollar_volume_20=30_000_000.0,
-        max_vol_20=0.05,
+        max_vol_20=0.065,
     ),
 }
 
