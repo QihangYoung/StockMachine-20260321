@@ -21,6 +21,7 @@
 - `experiment-manifest.md`: minimum replay packet, artifact checklist, and audit fields
 - `h1-development-plan.md`: staged development plan for the separate `us_equities_h1` strategy line
 - `h1-research-protocol.md`: frozen first-line contract for horizon-1 US-equities research
+- `robustness-framework-design.md`: shared robustness-evaluation architecture and first-pass analyzer plan
 - `strict-framework-reuse-audit.md`: first-pass `h1/h5` strict-framework abstraction status and remaining shared-infrastructure gaps
 - `historical-universe-contract.md`: preferred P2 contract for session-scoped universe membership
 - `sequence-expert-migration-report.md`: first-pass LSTM and Transformer migration scope, dependency strategy, and strict-backtest results

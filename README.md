@@ -42,6 +42,8 @@ For the current strict research contract and rerun findings, see
 For the scaffolded horizon-1 strategy line, see
 [docs/h1-development-plan.md](docs/h1-development-plan.md) and
 [docs/h1-research-protocol.md](docs/h1-research-protocol.md).
+For the shared robustness-evaluation architecture, see
+[docs/robustness-framework-design.md](docs/robustness-framework-design.md).
 For the first sequence-model migration pass, see
 [docs/sequence-expert-migration-report.md](docs/sequence-expert-migration-report.md).
 
