@@ -4,7 +4,16 @@ import numpy as np
 import pandas as pd
 
 from stockmachine.alpha import list_alpha_expert_names
-from stockmachine.research.us_equities_baseline import FEATURE_COLUMNS, generate_walk_forward_predictions
+from stockmachine.research.builders.common import (
+    BASELINE12_FEATURE_COLUMNS,
+    BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS,
+)
+from stockmachine.research.us_equities_baseline import (
+    FEATURE_COLUMNS,
+    fit_predict_base_model,
+    generate_walk_forward_predictions,
+    resolve_model_feature_columns,
+)
 
 
 def _synthetic_panel(*, end: str = "2025-03-31") -> pd.DataFrame:
@@ -153,3 +162,51 @@ def test_generate_walk_forward_predictions_can_include_partial_current_test_tail
     assert not predictions.empty
     assert predictions["date"].max() == pd.Timestamp("2025-04-08")
     assert predictions.loc[predictions["date"] == pd.Timestamp("2025-04-08"), "target"].isna().all()
+
+
+def test_resolve_model_feature_columns_routes_validated_h5_models() -> None:
+    assert resolve_model_feature_columns("extra_trees") == BASELINE12_FEATURE_COLUMNS
+    assert resolve_model_feature_columns("hist_gbm") == FEATURE_COLUMNS
+    assert resolve_model_feature_columns("lightgbm_ranker") == BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS
+    assert resolve_model_feature_columns("xgboost_regressor") == FEATURE_COLUMNS
+
+
+def test_fit_predict_base_model_uses_model_specific_feature_subset(monkeypatch) -> None:
+    panel = _synthetic_panel()
+    train_frame = panel.loc[panel["date"] < pd.Timestamp("2025-03-20")].copy()
+    test_frame = panel.loc[panel["date"] >= pd.Timestamp("2025-03-20")].copy()
+    captured: dict[str, object] = {}
+
+    class DummyRanker:
+        feature_columns: tuple[str, ...] = ()
+
+        def fit(self, X: pd.DataFrame, y: pd.Series, *, group: list[int]) -> "DummyRanker":
+            captured["fit_columns"] = tuple(X.columns)
+            captured["feature_columns"] = tuple(self.feature_columns)
+            captured["group"] = list(group)
+            return self
+
+        def predict(self, X: pd.DataFrame) -> np.ndarray:
+            captured["predict_columns"] = tuple(X.columns)
+            return np.zeros(len(X), dtype=float)
+
+    monkeypatch.setattr(
+        "stockmachine.research.us_equities_baseline.get_trainable_model_builder",
+        lambda _name: DummyRanker,
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.us_equities_baseline.get_trainable_model_fit_kind",
+        lambda _name: "ranker",
+    )
+
+    predictions = fit_predict_base_model(
+        "lightgbm_ranker",
+        train_frame=train_frame,
+        test_frame=test_frame,
+    )
+
+    assert not predictions.empty
+    assert captured["feature_columns"] == BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS
+    assert captured["fit_columns"] == BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS
+    assert captured["predict_columns"] == BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS
+    assert sum(captured["group"]) == len(train_frame)

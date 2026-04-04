@@ -117,3 +117,42 @@ def test_build_research_frame_target_responds_to_future_benchmark_only() -> None
     assert base_row["future_return"] == shifted_row["future_return"]
     assert base_row["benchmark_future_return"] != shifted_row["benchmark_future_return"]
     assert base_row["target"] != shifted_row["target"]
+
+
+def test_build_research_frame_emits_h5_v2_core_features() -> None:
+    price_data = _toy_price_panel()
+    metadata = pd.DataFrame(
+        [
+            {"symbol": "AAPL", "sector": "Tech", "industry": "Hardware"},
+        ]
+    )
+
+    frame = build_research_frame(
+        price_data,
+        benchmark_symbol="SPY",
+        horizon=5,
+        symbol_metadata=metadata,
+    )
+
+    expected_columns = {
+        "gap_z_20",
+        "intraday_return",
+        "ret_2d",
+        "mom_3",
+        "vol_5",
+        "vol_10",
+        "range_5",
+        "volume_ratio_5",
+        "close_ma5_gap",
+        "close_ma20_gap",
+        "price_position_20d",
+        "rel_ret_1d",
+        "rel_ret_5d",
+        "sector_rel_ret_1d",
+    }
+    assert expected_columns.issubset(frame.columns)
+    sample_row = _row_for(frame, pd.Timestamp("2024-04-12"))
+    assert not sample_row[list(FEATURE_COLUMNS)].isna().any()
+    assert sample_row["sector"] == "Tech"
+    assert sample_row["industry"] == "Hardware"
+    assert sample_row["sector_rel_ret_1d"] == 0.0

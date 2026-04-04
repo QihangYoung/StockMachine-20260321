@@ -36,6 +36,10 @@ from stockmachine.research.builders import (
     get_sklearn_model_builders,
     prepare_model_frame,
 )
+from stockmachine.research.builders.common import (
+    BASELINE12_FEATURE_COLUMNS,
+    BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS,
+)
 from stockmachine.research.comparison import (
     build_yearly_holdout_windows,
     comparison_summary_frame,
@@ -68,6 +72,12 @@ BASE_MODEL_NAMES: tuple[str, ...] = tuple(
     spec.name for spec in list_alpha_experts() if not spec.components
 )
 MODEL_NAMES: tuple[str, ...] = list_alpha_expert_names()
+
+MODEL_FEATURE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "extra_trees": BASELINE12_FEATURE_COLUMNS,
+    "hist_gbm": FEATURE_COLUMNS,
+    "lightgbm_ranker": BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS,
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -533,6 +543,8 @@ def build_research_frame(
         .sort_values("date")
         .reset_index(drop=True)
     )
+    benchmark["benchmark_ret_1d"] = benchmark["benchmark_close"].pct_change(1, fill_method=None)
+    benchmark["benchmark_ret_5d"] = benchmark["benchmark_close"].pct_change(5, fill_method=None)
     benchmark["benchmark_mom_20"] = benchmark["benchmark_close"].pct_change(20, fill_method=None)
     benchmark["benchmark_mom_60"] = benchmark["benchmark_close"].pct_change(60, fill_method=None)
     benchmark["benchmark_future_return"] = (
@@ -541,27 +553,61 @@ def build_research_frame(
 
     panel = price_data.loc[price_data["symbol"] != benchmark_symbol].copy()
     panel = panel.merge(
-        benchmark[["date", "benchmark_mom_20", "benchmark_mom_60", "benchmark_future_return"]],
+        benchmark[
+            [
+                "date",
+                "benchmark_ret_1d",
+                "benchmark_ret_5d",
+                "benchmark_mom_20",
+                "benchmark_mom_60",
+                "benchmark_future_return",
+            ]
+        ],
         on="date",
         how="left",
     )
 
     group = panel.groupby("symbol", group_keys=False)
     panel["prev_close"] = group["close"].shift(1)
+    panel["intraday_return"] = panel["close"] / panel["open"] - 1.0
     panel["ret_1d"] = group["close"].pct_change(1, fill_method=None)
+    panel["ret_2d"] = group["close"].pct_change(2, fill_method=None)
+    panel["mom_3"] = group["close"].pct_change(3, fill_method=None)
     panel["mom_5"] = group["close"].pct_change(5, fill_method=None)
     panel["mom_10"] = group["close"].pct_change(10, fill_method=None)
     panel["mom_20"] = group["close"].pct_change(20, fill_method=None)
     panel["mom_60"] = group["close"].pct_change(60, fill_method=None)
+    panel["vol_5"] = group["ret_1d"].rolling(5).std().reset_index(level=0, drop=True)
+    panel["vol_10"] = group["ret_1d"].rolling(10).std().reset_index(level=0, drop=True)
     panel["vol_20"] = group["ret_1d"].rolling(20).std().reset_index(level=0, drop=True)
     panel["vol_60"] = group["ret_1d"].rolling(60).std().reset_index(level=0, drop=True)
     panel["dollar_volume"] = panel["close"] * panel["volume"]
     panel["median_dollar_volume_20"] = (
         group["dollar_volume"].rolling(20).median().reset_index(level=0, drop=True)
     )
+    panel["volume_ratio_5"] = panel["volume"] / group["volume"].rolling(5).mean().reset_index(level=0, drop=True)
     panel["volume_ratio_20"] = panel["volume"] / group["volume"].rolling(20).mean().reset_index(level=0, drop=True)
     panel["range_1d"] = panel["high"] / panel["low"] - 1.0
+    panel["range_5"] = group["range_1d"].rolling(5).mean().reset_index(level=0, drop=True)
     panel["gap_1"] = panel["open"] / panel["prev_close"] - 1.0
+    gap_mean_20 = group["gap_1"].rolling(20).mean().reset_index(level=0, drop=True)
+    gap_std_20 = group["gap_1"].rolling(20).std().reset_index(level=0, drop=True)
+    panel["gap_z_20"] = ((panel["gap_1"] - gap_mean_20) / gap_std_20.replace(0.0, np.nan)).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    panel["gap_z_20"] = panel["gap_z_20"].fillna(0.0)
+    close_ma5 = group["close"].rolling(5).mean().reset_index(level=0, drop=True)
+    close_ma20 = group["close"].rolling(20).mean().reset_index(level=0, drop=True)
+    panel["close_ma5_gap"] = panel["close"] / close_ma5 - 1.0
+    panel["close_ma20_gap"] = panel["close"] / close_ma20 - 1.0
+    rolling_high_20 = group["high"].rolling(20).max().reset_index(level=0, drop=True)
+    rolling_low_20 = group["low"].rolling(20).min().reset_index(level=0, drop=True)
+    panel["price_position_20d"] = (panel["close"] - rolling_low_20) / (
+        rolling_high_20 - rolling_low_20 + 1e-12
+    )
+    panel["rel_ret_1d"] = panel["ret_1d"] - panel["benchmark_ret_1d"]
+    panel["rel_ret_5d"] = panel["mom_5"] - panel["benchmark_ret_5d"]
     panel["rel_mom_20"] = panel["mom_20"] - panel["benchmark_mom_20"]
     panel["rel_mom_60"] = panel["mom_60"] - panel["benchmark_mom_60"]
     panel["future_return"] = group["adj_open"].shift(-(horizon + 1)) / group["adj_open"].shift(-1) - 1.0
@@ -580,6 +626,9 @@ def build_research_frame(
     else:
         panel["sector"] = "Unknown"
         panel["industry"] = "Unknown"
+
+    sector_group = panel.groupby(["date", "sector"], group_keys=False)
+    panel["sector_rel_ret_1d"] = panel["ret_1d"] - sector_group["ret_1d"].transform("mean")
 
     required_columns = list(FEATURE_COLUMNS)
     if drop_unlabeled_rows:
@@ -936,6 +985,12 @@ def get_trainable_model_fit_kind(name: str) -> str:
     raise ValueError(f"Unsupported trainable base model '{name}'.")
 
 
+def resolve_model_feature_columns(name: str) -> tuple[str, ...]:
+    """Resolve the h5 feature subset for one model."""
+
+    return MODEL_FEATURE_COLUMNS.get(name, FEATURE_COLUMNS)
+
+
 def score_factor_model(name: str, frame: pd.DataFrame) -> np.ndarray:
     """Score one non-trainable baseline expert."""
 
@@ -962,7 +1017,10 @@ def fit_predict_base_model(
     prepared_test = prepare_model_frame(test_frame)
     builder = get_trainable_model_builder(name)
     fit_kind = get_trainable_model_fit_kind(name)
+    feature_columns = resolve_model_feature_columns(name)
     model = builder()
+    if fit_kind == "ranker" and hasattr(model, "feature_columns"):
+        model.feature_columns = tuple(feature_columns)
     fit_kwargs: dict[str, object] = {}
     if fit_kind == "ranker":
         fit_kwargs["group"] = build_query_group_sizes(prepared_train)
@@ -972,8 +1030,8 @@ def fit_predict_base_model(
         model.fit(prepared_train, prepared_train["target"], **fit_kwargs)
         scores = model.predict(prepared_test)
     else:
-        model.fit(prepared_train[list(FEATURE_COLUMNS)], prepared_train["target"], **fit_kwargs)
-        scores = model.predict(prepared_test[list(FEATURE_COLUMNS)])
+        model.fit(prepared_train[list(feature_columns)], prepared_train["target"], **fit_kwargs)
+        scores = model.predict(prepared_test[list(feature_columns)])
     return _assemble_predictions(prepared_test, scores, name)
 
 
