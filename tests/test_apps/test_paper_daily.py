@@ -916,3 +916,11 @@ def test_parse_args_supports_nested_strategy_profile_paths() -> None:
     assert args.model == "extra_trees"
     assert args.run_name == "us-extra-trees-daily"
     assert args.strategy_project == "us_equities_h5"
+
+
+def test_expected_latest_completed_session_date_skips_good_friday() -> None:
+    assert paper_daily._expected_latest_completed_session_date(date(2026, 4, 6)) == date(2026, 4, 2)
+
+
+def test_expected_latest_completed_session_date_handles_normal_weekday() -> None:
+    assert paper_daily._expected_latest_completed_session_date(date(2026, 4, 7)) == date(2026, 4, 6)

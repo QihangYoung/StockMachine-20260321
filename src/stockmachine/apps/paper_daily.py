@@ -9,6 +9,17 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
+from pandas.tseries.holiday import (
+    AbstractHolidayCalendar,
+    GoodFriday,
+    Holiday,
+    USLaborDay,
+    USMartinLutherKingJr,
+    USMemorialDay,
+    USPresidentsDay,
+    USThanksgivingDay,
+    nearest_workday,
+)
 
 from stockmachine.alpha import list_alpha_expert_names
 from stockmachine.apps.paper_profiles import load_strategy_profile
@@ -42,6 +53,24 @@ from stockmachine.research.us_equities_baseline import OverlayConfig
 from stockmachine.state import LocalLedger
 
 PaperDailyPreflightResult = DailyRunGovernanceResult
+
+
+class _NyseHolidayCalendar(AbstractHolidayCalendar):
+    rules = [
+        Holiday("NewYearsDay", month=1, day=1, observance=nearest_workday),
+        USMartinLutherKingJr,
+        USPresidentsDay,
+        GoodFriday,
+        USMemorialDay,
+        Holiday("Juneteenth", month=6, day=19, observance=nearest_workday),
+        Holiday("IndependenceDay", month=7, day=4, observance=nearest_workday),
+        USLaborDay,
+        USThanksgivingDay,
+        Holiday("Christmas", month=12, day=25, observance=nearest_workday),
+    ]
+
+
+_NYSE_BUSINESS_DAY = pd.offsets.CustomBusinessDay(calendar=_NyseHolidayCalendar())
 
 
 @dataclass(slots=True, frozen=True)
@@ -792,7 +821,7 @@ def _latest_local_table_date(
 
 
 def _expected_latest_completed_session_date(session_date: date) -> date:
-    return (pd.Timestamp(session_date) - pd.offsets.BDay(1)).date()
+    return (pd.Timestamp(session_date) - _NYSE_BUSINESS_DAY).date()
 
 
 def _membership_refresh_start_date(
