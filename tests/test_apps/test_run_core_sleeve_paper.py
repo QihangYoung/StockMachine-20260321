@@ -13,8 +13,10 @@ from stockmachine.apps.run_core_sleeve_paper import (
     build_combined_target_weights,
     build_order_plan,
     compute_rebalance_state,
+    load_credentials_from_json,
     load_hybrid_config,
 )
+from stockmachine.data.vendors import AlpacaCredentials
 from stockmachine.backtest.protocols import AccountSnapshot
 from stockmachine.domain.models import TargetPosition
 from stockmachine.execution.brokers import BrokerAccount, BrokerClock, BrokerOrder, BrokerPosition
@@ -194,6 +196,24 @@ def test_load_hybrid_config_expands_weights(tmp_path: Path) -> None:
     config = load_hybrid_config(config_path)
     assert config.core_weights == (("SPY", 0.094), ("AGG", 0.846))
     assert config.sleeve_weight == 0.06
+
+
+def test_load_credentials_from_json_accepts_utf8_bom(tmp_path: Path) -> None:
+    credentials_path = tmp_path / "credentials.json"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "alpaca_api_key_id": "key",
+                "alpaca_api_secret_key": "secret",
+                "alpaca_trading_base_url": "https://paper-api.alpaca.markets",
+                "alpaca_data_base_url": "https://data.alpaca.markets",
+            }
+        ),
+        encoding="utf-8-sig",
+    )
+    credentials = load_credentials_from_json(credentials_path)
+    assert isinstance(credentials, AlpacaCredentials)
+    assert credentials.api_key_id == "key"
 
 
 def test_compute_rebalance_state_respects_interval() -> None:

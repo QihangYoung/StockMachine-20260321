@@ -501,7 +501,7 @@ class HybridPaperRunner:
 
 
 def load_hybrid_config(path: str | Path) -> HybridPaperConfig:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = _load_json_file(path)
     core_policy = dict(payload.get("core_policy", {}))
     alpha_sleeve = dict(payload.get("alpha_sleeve", {}))
     core_weights_map = core_policy.get("weights_at_total_portfolio_level") or _expand_core_weights(core_policy)
@@ -545,7 +545,7 @@ def _expand_core_weights(core_policy: Mapping[str, Any]) -> dict[str, float]:
 
 
 def load_credentials_from_json(path: str | Path) -> AlpacaCredentials:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = _load_json_file(path)
     api_key_id = str(payload.get("alpaca_api_key_id") or "").strip()
     api_secret_key = str(payload.get("alpaca_api_secret_key") or "").strip()
     if not api_key_id or not api_secret_key:
@@ -574,7 +574,7 @@ def load_hybrid_state(path: str | Path | None) -> HybridState:
     state_path = Path(path)
     if not state_path.exists():
         return HybridState()
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload = _load_json_file(state_path)
     raw_date = payload.get("last_rebalance_effective_session_date")
     return HybridState(
         last_rebalance_effective_session_date=(date.fromisoformat(str(raw_date)) if raw_date else None),
@@ -590,6 +590,13 @@ def save_hybrid_state(path: str | Path | None, state: HybridState) -> None:
     state_path = Path(path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(asdict(state), indent=2, default=str), encoding="utf-8")
+
+
+def _load_json_file(path: str | Path) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a JSON object in {Path(path)}.")
+    return payload
 
 
 def compute_rebalance_state(
