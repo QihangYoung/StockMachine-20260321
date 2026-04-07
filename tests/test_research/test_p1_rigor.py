@@ -421,6 +421,63 @@ def test_build_strict_research_bundle_uses_h1_framework_components(monkeypatch) 
     assert captured["feature_version"] == "v2"
 
 
+def test_build_strict_research_bundle_routes_h5_target_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.load_us_equities_dataset",
+        lambda layout=None: _strict_bundle_dataset(include_membership=True),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_price_panel_from_silver",
+        lambda dataset: _strict_bundle_price_panel(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_point_in_time_metadata_history",
+        lambda session_dates, **kwargs: _cache_test_metadata(),
+    )
+
+    def _build_h5_research_frame(price_data, **kwargs):
+        captured["target_config"] = kwargs.get("target_config")
+        return _cache_test_research_frame()
+
+    monkeypatch.setattr("stockmachine.research.p1_rigor.build_research_frame", _build_h5_research_frame)
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.generate_walk_forward_predictions",
+        lambda research_frame, **kwargs: pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2025-01-02"),
+                    "symbol": "AAPL",
+                    "model": "hist_gbm",
+                    "score": 0.9,
+                    "confidence": 0.9,
+                }
+            ]
+        ),
+    )
+
+    bundle = build_strict_research_bundle(
+        predict_start="2025-01-01",
+        horizon=5,
+        prediction_options={
+            "target_kind": "beta_residual",
+            "beta_lookback_days": 80,
+            "beta_min_obs": 55,
+            "beta_clip_low": 0.1,
+            "beta_clip_high": 1.8,
+        },
+    )
+
+    target_config = captured["target_config"]
+    assert bundle.strategy_project == "us_equities_h5"
+    assert target_config.kind == "beta_residual"
+    assert target_config.beta_lookback_days == 80
+    assert target_config.beta_min_obs == 55
+    assert target_config.beta_clip_low == 0.1
+    assert target_config.beta_clip_high == 1.8
+
+
 def _configure_cache_safe_identity(monkeypatch, *, silver_token: str = "silver_v1") -> None:
     monkeypatch.setattr(
         "stockmachine.research.p1_rigor._build_repository_cache_state",
@@ -678,6 +735,67 @@ def test_build_strict_research_bundle_invalidates_cache_when_silver_fingerprint_
         predict_start="2025-01-01",
         horizon=5,
         cache_dir=cache_dir,
+    )
+
+    assert counts["load"] == 2
+    assert counts["price"] == 2
+    assert counts["metadata"] == 2
+    assert counts["research_frame"] == 2
+    assert counts["predictions"] == 2
+    assert first.bundle_cache_key != second.bundle_cache_key
+    assert second.bundle_cache_hit is False
+    assert second.prediction_cache_hit is False
+
+
+def test_build_strict_research_bundle_invalidates_bundle_cache_when_h5_target_changes(tmp_path, monkeypatch) -> None:
+    counts = {"load": 0, "price": 0, "metadata": 0, "research_frame": 0, "predictions": 0}
+    _configure_cache_safe_identity(monkeypatch)
+
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.load_us_equities_dataset",
+        lambda layout=None: counts.__setitem__("load", counts["load"] + 1) or _strict_bundle_dataset(include_membership=True),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_price_panel_from_silver",
+        lambda dataset: counts.__setitem__("price", counts["price"] + 1) or _strict_bundle_price_panel(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_point_in_time_metadata_history",
+        lambda session_dates, **kwargs: counts.__setitem__("metadata", counts["metadata"] + 1) or _cache_test_metadata(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.build_research_frame",
+        lambda price_data, **kwargs: counts.__setitem__("research_frame", counts["research_frame"] + 1)
+        or _cache_test_research_frame(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.research.p1_rigor.generate_walk_forward_predictions",
+        lambda research_frame, **kwargs: counts.__setitem__("predictions", counts["predictions"] + 1)
+        or pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2025-01-02"),
+                    "symbol": "AAPL",
+                    "model": "hist_gbm",
+                    "score": 0.9,
+                    "confidence": 0.9,
+                }
+            ]
+        ),
+    )
+
+    cache_dir = tmp_path / "cache"
+    first = build_strict_research_bundle(
+        predict_start="2025-01-01",
+        horizon=5,
+        cache_dir=cache_dir,
+        prediction_options={"target_kind": "benchmark_excess"},
+    )
+    second = build_strict_research_bundle(
+        predict_start="2025-01-01",
+        horizon=5,
+        cache_dir=cache_dir,
+        prediction_options={"target_kind": "beta_residual", "beta_lookback_days": 80},
     )
 
     assert counts["load"] == 2

@@ -33,6 +33,7 @@ from stockmachine.research.strict_reports import (
 from stockmachine.research.strict_frameworks import StrictFrameworkSpec, resolve_strict_framework
 from stockmachine.research.us_equities_baseline import (
     BENCHMARK_SYMBOL,
+    H5TargetConfig,
     OverlayConfig,
     build_point_in_time_metadata_history,
     build_price_panel_from_silver,
@@ -226,6 +227,7 @@ def _build_bundle_cache_signature(
     layout: StorageLayout,
     horizon: int,
     repository_state: RepositoryCacheState,
+    research_frame_options: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "cache_kind": "strict_bundle",
@@ -237,6 +239,7 @@ def _build_bundle_cache_signature(
         "protocol": _framework_protocol_dict(framework),
         "horizon": int(horizon),
         "universe_name": framework.universe_name,
+        "research_frame_options": _normalize_prediction_options(research_frame_options),
         "silver_inputs": _build_silver_input_fingerprint(layout),
     }
 
@@ -273,6 +276,27 @@ def _normalize_prediction_options(payload: Mapping[str, object] | None) -> dict[
     if not payload:
         return {}
     return json.loads(json.dumps(dict(payload), sort_keys=True, default=str))
+
+
+def _normalize_framework_research_frame_options(
+    framework: StrictFrameworkSpec,
+    prediction_options: Mapping[str, object] | None,
+) -> dict[str, object]:
+    options = dict(prediction_options or {})
+    if framework.protocol_family == "h1":
+        return {}
+    target_option_keys = (
+        "target_kind",
+        "beta_lookback_days",
+        "beta_min_obs",
+        "beta_clip_low",
+        "beta_clip_high",
+    )
+    return {
+        key: options[key]
+        for key in target_option_keys
+        if key in options and options.get(key) is not None
+    }
 
 
 def _strict_bundle_cache_dir(cache_dir: str | Path, bundle_key: str) -> Path:
@@ -440,6 +464,7 @@ def build_strict_research_bundle(
             layout=storage,
             horizon=horizon,
             repository_state=repository_state,
+            research_frame_options=_normalize_framework_research_frame_options(framework, prediction_options),
         )
         bundle_cache_key = _make_cache_key(bundle_manifest)
         bundle_cache_dir = _strict_bundle_cache_dir(cache_dir, bundle_cache_key)
@@ -453,6 +478,7 @@ def build_strict_research_bundle(
                     storage=storage,
                     horizon=horizon,
                     framework=framework,
+                    prediction_options=prediction_options,
                     source_inputs=source_inputs,
                 )
                 _write_strict_bundle_cache(
@@ -468,6 +494,7 @@ def build_strict_research_bundle(
                 storage=storage,
                 horizon=horizon,
                 framework=framework,
+                prediction_options=prediction_options,
                 source_inputs=source_inputs,
             )
             _write_strict_bundle_cache(
@@ -483,6 +510,7 @@ def build_strict_research_bundle(
             storage=storage,
             horizon=horizon,
             framework=framework,
+            prediction_options=prediction_options,
             source_inputs=source_inputs,
         )
 
@@ -551,6 +579,7 @@ def _build_uncached_strict_bundle_inputs(
     storage: StorageLayout,
     horizon: int,
     framework: StrictFrameworkSpec,
+    prediction_options: Mapping[str, object] | None = None,
     source_inputs: StrictResearchSourceInputs | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if source_inputs is None:
@@ -580,6 +609,7 @@ def _build_uncached_strict_bundle_inputs(
         price_data=price_data,
         metadata=metadata,
         horizon=horizon,
+        prediction_options=prediction_options,
     )
     return dataset, price_data, metadata, research_frame
 
@@ -609,6 +639,7 @@ def _build_framework_research_frame(
     price_data: pd.DataFrame,
     metadata: pd.DataFrame,
     horizon: int,
+    prediction_options: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
     if framework.protocol_family == "h1":
         from stockmachine.research.h1_us_equities import build_h1_research_frame
@@ -619,11 +650,45 @@ def _build_framework_research_frame(
             symbol_metadata=metadata,
         )
 
+    options = dict(prediction_options or {})
+    base_target_config = H5TargetConfig()
+    target_option_keys = (
+        "target_kind",
+        "beta_lookback_days",
+        "beta_min_obs",
+        "beta_clip_low",
+        "beta_clip_high",
+    )
+    target_kwargs = {
+        key: options.get(key)
+        for key in target_option_keys
+        if key in options and options.get(key) is not None
+    }
+    target_config = H5TargetConfig(
+        kind=str(target_kwargs.get("target_kind", base_target_config.kind)),
+        beta_lookback_days=int(target_kwargs.get("beta_lookback_days", base_target_config.beta_lookback_days)),
+        beta_min_obs=int(target_kwargs.get("beta_min_obs", base_target_config.beta_min_obs)),
+        beta_clip_low=(
+            base_target_config.beta_clip_low
+            if "beta_clip_low" not in target_kwargs
+            else (
+                None if target_kwargs.get("beta_clip_low") is None else float(target_kwargs["beta_clip_low"])
+            )
+        ),
+        beta_clip_high=(
+            base_target_config.beta_clip_high
+            if "beta_clip_high" not in target_kwargs
+            else (
+                None if target_kwargs.get("beta_clip_high") is None else float(target_kwargs["beta_clip_high"])
+            )
+        ),
+    )
     return build_research_frame(
         price_data,
         benchmark_symbol=BENCHMARK_SYMBOL,
         horizon=horizon,
         symbol_metadata=metadata,
+        target_config=target_config,
     )
 
 

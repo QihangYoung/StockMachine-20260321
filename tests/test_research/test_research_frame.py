@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from stockmachine.research.us_equities_baseline import FEATURE_COLUMNS, build_research_frame
+from stockmachine.research.us_equities_baseline import (
+    FEATURE_COLUMNS,
+    H5TargetConfig,
+    build_research_frame,
+)
 
 
 def _toy_price_panel(periods: int = 90) -> pd.DataFrame:
@@ -40,6 +45,28 @@ def _toy_price_panel(periods: int = 90) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _toy_price_panel_with_peer(periods: int = 90) -> pd.DataFrame:
+    base = _toy_price_panel(periods=periods)
+    dates = pd.Index(pd.to_datetime(base["date"].drop_duplicates())).sort_values()
+    peer_rows: list[dict[str, object]] = []
+    for idx, current_date in enumerate(dates):
+        stock_open = 120.0 + idx * 0.45
+        stock_close = stock_open * (1.0 + 0.0015 * np.cos(idx / 6.0))
+        peer_rows.append(
+            {
+                "date": current_date,
+                "symbol": "MSFT",
+                "open": stock_open,
+                "high": stock_open * 1.008,
+                "low": stock_open * 0.992,
+                "close": stock_close,
+                "volume": 900_000.0 + idx * 6_000.0,
+                "price_adjust_factor": 1.0,
+            }
+        )
+    return pd.concat([base, pd.DataFrame(peer_rows)], ignore_index=True)
 
 
 def _row_for(frame: pd.DataFrame, date: pd.Timestamp, symbol: str = "AAPL") -> pd.Series:
@@ -156,3 +183,51 @@ def test_build_research_frame_emits_h5_v2_core_features() -> None:
     assert sample_row["sector"] == "Tech"
     assert sample_row["industry"] == "Hardware"
     assert sample_row["sector_rel_ret_1d"] == 0.0
+
+
+def test_build_research_frame_supports_beta_residual_target() -> None:
+    price_data = _toy_price_panel()
+
+    frame = build_research_frame(
+        price_data,
+        benchmark_symbol="SPY",
+        horizon=5,
+        target_config=H5TargetConfig(kind="beta_residual", beta_lookback_days=20, beta_min_obs=10),
+    )
+
+    sample_row = _row_for(frame, pd.Timestamp("2024-04-12"))
+    assert sample_row["target_kind"] == "beta_residual"
+    assert np.isfinite(sample_row["target_beta_estimate"])
+    assert sample_row["target"] == pytest.approx(
+        sample_row["future_return"] - sample_row["target_beta_estimate"] * sample_row["benchmark_future_return"]
+    )
+
+
+def test_build_research_frame_supports_sector_residual_target() -> None:
+    price_data = _toy_price_panel_with_peer()
+    metadata = pd.DataFrame(
+        [
+            {"symbol": "AAPL", "sector": "Tech", "industry": "Hardware"},
+            {"symbol": "MSFT", "sector": "Tech", "industry": "Software"},
+        ]
+    )
+
+    frame = build_research_frame(
+        price_data,
+        benchmark_symbol="SPY",
+        horizon=5,
+        symbol_metadata=metadata,
+        target_config=H5TargetConfig(kind="sector_residual"),
+    )
+    sample_date = pd.Timestamp("2024-04-12")
+    day_slice = frame.loc[frame["date"] == sample_date].copy()
+
+    assert set(day_slice["symbol"]) == {"AAPL", "MSFT"}
+    sector_mean = float(day_slice["future_return"].mean())
+    np.testing.assert_allclose(
+        day_slice["target"].to_numpy(),
+        (day_slice["future_return"] - sector_mean).to_numpy(),
+        atol=1e-12,
+        rtol=0.0,
+    )
+    assert float(day_slice["target"].sum()) == pytest.approx(0.0, abs=1e-12)

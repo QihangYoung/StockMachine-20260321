@@ -79,6 +79,24 @@ MODEL_FEATURE_COLUMNS: dict[str, tuple[str, ...]] = {
     "lightgbm_ranker": BASELINE12_PLUS_SHORT_AND_RELATIVE_FEATURE_COLUMNS,
 }
 
+H5_TARGET_KINDS: tuple[str, ...] = (
+    "benchmark_excess",
+    "beta_residual",
+    "sector_residual",
+    "beta_sector_residual",
+)
+
+
+@dataclass(slots=True, frozen=True)
+class H5TargetConfig:
+    """Configuration for h5 label engineering."""
+
+    kind: str = "benchmark_excess"
+    beta_lookback_days: int = 60
+    beta_min_obs: int = 40
+    beta_clip_low: float | None = 0.0
+    beta_clip_high: float | None = 2.5
+
 
 @dataclass(slots=True, frozen=True)
 class PeriodMetrics:
@@ -624,12 +642,101 @@ def build_metadata_from_silver(dataset: dict[str, pd.DataFrame]) -> pd.DataFrame
     return metadata.sort_values("symbol").reset_index(drop=True)
 
 
+def _normalize_h5_target_config(target_config: H5TargetConfig | None) -> H5TargetConfig:
+    config = target_config or H5TargetConfig()
+    normalized_kind = str(config.kind).strip().lower()
+    if normalized_kind not in H5_TARGET_KINDS:
+        raise ValueError(
+            f"Unsupported h5 target kind '{config.kind}'. Expected one of: {', '.join(H5_TARGET_KINDS)}"
+        )
+    return replace(config, kind=normalized_kind)
+
+
+def _compute_symbol_beta_estimate(
+    panel: pd.DataFrame,
+    *,
+    lookback_days: int,
+    min_obs: int,
+    clip_low: float | None,
+    clip_high: float | None,
+) -> pd.Series:
+    working = panel.copy()
+    working["ret_benchmark_product"] = working["ret_1d"] * working["benchmark_ret_1d"]
+    working["benchmark_ret_sq"] = working["benchmark_ret_1d"] ** 2
+    grouped = working.groupby("symbol", group_keys=False)
+    mean_ret = grouped["ret_1d"].rolling(lookback_days, min_periods=min_obs).mean().reset_index(level=0, drop=True)
+    mean_bench = grouped["benchmark_ret_1d"].rolling(lookback_days, min_periods=min_obs).mean().reset_index(
+        level=0,
+        drop=True,
+    )
+    mean_prod = grouped["ret_benchmark_product"].rolling(lookback_days, min_periods=min_obs).mean().reset_index(
+        level=0,
+        drop=True,
+    )
+    mean_bench_sq = grouped["benchmark_ret_sq"].rolling(lookback_days, min_periods=min_obs).mean().reset_index(
+        level=0,
+        drop=True,
+    )
+    covariance = mean_prod - mean_ret * mean_bench
+    benchmark_var = mean_bench_sq - mean_bench.pow(2)
+    beta_estimate = covariance / benchmark_var.replace(0.0, np.nan)
+    if clip_low is not None or clip_high is not None:
+        beta_estimate = beta_estimate.clip(lower=clip_low, upper=clip_high)
+    return beta_estimate
+
+
+def _apply_h5_target_engineering(
+    panel: pd.DataFrame,
+    *,
+    target_config: H5TargetConfig,
+) -> pd.DataFrame:
+    engineered = panel.copy()
+    engineered["target_benchmark_excess"] = (
+        engineered["future_return"] - engineered["benchmark_future_return"]
+    )
+    engineered["target_beta_estimate"] = _compute_symbol_beta_estimate(
+        engineered,
+        lookback_days=int(target_config.beta_lookback_days),
+        min_obs=int(target_config.beta_min_obs),
+        clip_low=target_config.beta_clip_low,
+        clip_high=target_config.beta_clip_high,
+    )
+    engineered["target_beta_residual"] = (
+        engineered["future_return"]
+        - engineered["target_beta_estimate"] * engineered["benchmark_future_return"]
+    )
+    engineered["target_sector_future_return"] = engineered.groupby(["date", "sector"])["future_return"].transform(
+        "mean"
+    )
+    engineered["target_sector_residual"] = (
+        engineered["future_return"] - engineered["target_sector_future_return"]
+    )
+    engineered["target_beta_sector_mean"] = engineered.groupby(["date", "sector"])[
+        "target_beta_residual"
+    ].transform("mean")
+    engineered["target_beta_sector_residual"] = (
+        engineered["target_beta_residual"] - engineered["target_beta_sector_mean"]
+    )
+
+    target_column_by_kind = {
+        "benchmark_excess": "target_benchmark_excess",
+        "beta_residual": "target_beta_residual",
+        "sector_residual": "target_sector_residual",
+        "beta_sector_residual": "target_beta_sector_residual",
+    }
+    target_column = target_column_by_kind[target_config.kind]
+    engineered["target"] = engineered[target_column]
+    engineered["target_kind"] = target_config.kind
+    return engineered
+
+
 def build_research_frame(
     price_data: pd.DataFrame,
     *,
     benchmark_symbol: str,
     horizon: int,
     symbol_metadata: pd.DataFrame | None = None,
+    target_config: H5TargetConfig | None = None,
     drop_unlabeled_rows: bool = True,
 ) -> pd.DataFrame:
     """Build panel features and next-open horizon labels.
@@ -641,6 +748,7 @@ def build_research_frame(
     """
 
     price_data = _ensure_adjusted_price_columns(price_data.copy())
+    effective_target_config = _normalize_h5_target_config(target_config)
     benchmark = (
         price_data.loc[price_data["symbol"] == benchmark_symbol, ["date", "open", "close", "adj_open"]]
         .rename(columns={"open": "benchmark_open", "close": "benchmark_close", "adj_open": "benchmark_adj_open"})
@@ -715,7 +823,6 @@ def build_research_frame(
     panel["rel_mom_20"] = panel["mom_20"] - panel["benchmark_mom_20"]
     panel["rel_mom_60"] = panel["mom_60"] - panel["benchmark_mom_60"]
     panel["future_return"] = group["adj_open"].shift(-(horizon + 1)) / group["adj_open"].shift(-1) - 1.0
-    panel["target"] = panel["future_return"] - panel["benchmark_future_return"]
 
     if symbol_metadata is not None:
         merge_keys = ["symbol"]
@@ -733,6 +840,7 @@ def build_research_frame(
 
     sector_group = panel.groupby(["date", "sector"], group_keys=False)
     panel["sector_rel_ret_1d"] = panel["ret_1d"] - sector_group["ret_1d"].transform("mean")
+    panel = _apply_h5_target_engineering(panel, target_config=effective_target_config)
 
     required_columns = list(FEATURE_COLUMNS)
     if drop_unlabeled_rows:
@@ -921,6 +1029,8 @@ def generate_walk_forward_predictions(
                 "target",
                 "future_return",
                 "benchmark_future_return",
+                "target_kind",
+                "target_beta_estimate",
                 "score",
                 "confidence",
                 "model",
@@ -1415,20 +1525,22 @@ def save_risk_aware_artifacts(
 
 
 def _assemble_predictions(frame: pd.DataFrame, scores: np.ndarray, model_name: str) -> pd.DataFrame:
-    prediction_frame = frame[
-        [
-            "date",
-            "symbol",
-            "sector",
-            "industry",
-            "close",
-            "vol_20",
-            "median_dollar_volume_20",
-            "target",
-            "future_return",
-            "benchmark_future_return",
-        ]
-    ].copy()
+    prediction_columns = [
+        "date",
+        "symbol",
+        "sector",
+        "industry",
+        "close",
+        "vol_20",
+        "median_dollar_volume_20",
+        "target",
+        "future_return",
+        "benchmark_future_return",
+    ]
+    for optional_column in ("target_kind", "target_beta_estimate"):
+        if optional_column in frame.columns:
+            prediction_columns.append(optional_column)
+    prediction_frame = frame[prediction_columns].copy()
     prediction_frame["score"] = scores
     prediction_frame["confidence"] = (
         pd.Series(scores, index=prediction_frame.index)
