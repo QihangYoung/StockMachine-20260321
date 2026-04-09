@@ -291,6 +291,11 @@ class SilverWalkForwardSignalModel:
         self.last_prediction_context = None
         dataset = self.dataset_cache.load()
         effective_date = self.dataset_cache.resolve_session_date(session_date)
+        requested_symbols = {
+            str(symbol).upper()
+            for symbol in universe
+            if str(symbol).strip()
+        }
 
         price_data = build_price_panel_from_silver(dataset)
         metadata = build_point_in_time_metadata_history(
@@ -315,6 +320,12 @@ class SilverWalkForwardSignalModel:
         model_predictions = predictions[predictions["model"] == self.model_name].copy()
         if model_predictions.empty:
             return []
+        if requested_symbols:
+            model_predictions = model_predictions[
+                model_predictions["symbol"].astype(str).str.upper().isin(requested_symbols)
+            ].copy()
+            if model_predictions.empty:
+                return []
 
         available_dates = sorted(
             current_date
@@ -332,7 +343,7 @@ class SilverWalkForwardSignalModel:
             prediction_frame=prediction_slice,
             prediction_date=prediction_date,
         )
-        current = prediction_slice[prediction_slice["symbol"].isin(list(universe))].copy()
+        current = prediction_slice.copy()
         if current.empty:
             return []
 
@@ -1899,7 +1910,7 @@ def build_alpaca_paper_runner(
             sector_neutral=config.sector_neutral,
         ),
         execution_policy=SameSessionMarketOrderExecutionPolicy(),
-        universe_provider=StaticUniverseProvider(tuple(universe)) if universe else LatestSilverUniverseProvider(dataset_cache),
+        universe_provider=StaticUniverseProvider(tuple(universe or DEFAULT_UNIVERSE)),
         account_provider=SyncedAccountProvider(account_sync),
         market_data_provider=LatestSilverBarProvider(dataset_cache),
         order_submitter=AlpacaOrderSubmitter(broker),

@@ -8,6 +8,7 @@ import pandas as pd
 
 from stockmachine.apps.run_us_equities_paper import (
     AlpacaOrderSubmitter,
+    DEFAULT_UNIVERSE,
     PaperRunConfig,
     PaperRunDependencies,
     PaperRunner,
@@ -105,6 +106,28 @@ def test_build_alpaca_paper_runner_uses_same_session_market_execution_policy(mon
     assert config.session_date == date(2026, 3, 22)
 
 
+def test_build_alpaca_paper_runner_defaults_to_research_universe(monkeypatch, tmp_path) -> None:
+    class _FakeBroker:
+        def __init__(self) -> None:
+            self.credentials = SimpleNamespace(trading_base_url="https://paper-api.alpaca.markets")
+
+        def is_paper_trading_environment(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.AlpacaTradingAdapter.from_env",
+        lambda: _FakeBroker(),
+    )
+
+    runner, _ = build_alpaca_paper_runner(
+        universe=(),
+        session_date=date(2026, 3, 22),
+        ledger_path=tmp_path / "paper-ledger.sqlite3",
+    )
+
+    assert runner.dependencies.universe_provider.get_universe(date(2026, 3, 22)) == DEFAULT_UNIVERSE
+
+
 def test_parse_session_date_round_trips_iso_string() -> None:
     assert parse_session_date("2026-03-21") == date(2026, 3, 21)
 
@@ -184,6 +207,87 @@ def test_silver_walk_forward_signal_model_uses_latest_partial_current_test_for_p
         "training_window": {"start": "2022-02-07", "end": "2025-02-11"},
         "validation_window": {"start": "2025-02-21", "end": "2025-08-21"},
         "prediction_window": {"start": "2025-09-02", "end": "2026-03-20"},
+    }
+
+
+def test_silver_walk_forward_signal_model_uses_latest_prediction_date_with_requested_universe(monkeypatch) -> None:
+    cache = SilverDatasetCache()
+    dataset = {
+        "daily_bar": pd.DataFrame(
+            {
+                "session_date": ["2026-04-07", "2026-04-08"],
+                "symbol": ["AAPL", "GLD"],
+            }
+        ),
+        "symbol_master": pd.DataFrame(),
+        "industry_membership": pd.DataFrame(),
+    }
+
+    monkeypatch.setattr(SilverDatasetCache, "load", lambda self: dataset)
+    monkeypatch.setattr(SilverDatasetCache, "resolve_session_date", lambda self, requested_date: date(2026, 4, 8))
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.build_price_panel_from_silver",
+        lambda _dataset: pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-04-07", "2026-04-08"]),
+                "symbol": ["AAPL", "GLD"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.build_point_in_time_metadata_history",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.build_research_frame",
+        lambda *args, **kwargs: pd.DataFrame({"date": pd.to_datetime(["2026-04-07", "2026-04-08"])}),
+    )
+
+    def _fake_generate_walk_forward_predictions(panel, **kwargs):
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-04-07", "2026-04-08"]),
+                "symbol": ["AAPL", "GLD"],
+                "sector": ["Tech", "Materials"],
+                "industry": ["Hardware", "Gold"],
+                "close": [100.0, 300.0],
+                "vol_20": [0.02, 0.01],
+                "median_dollar_volume_20": [60_000_000.0, 90_000_000.0],
+                "target": [pd.NA, pd.NA],
+                "future_return": [pd.NA, pd.NA],
+                "benchmark_future_return": [pd.NA, pd.NA],
+                "score": [0.9, 0.4],
+                "confidence": [0.8, 0.6],
+                "model": ["extra_trees", "extra_trees"],
+                "split_fold_index": [8, 8],
+                "split_anchor_date": pd.to_datetime(["2026-04-01", "2026-04-01"]),
+                "split_train_start": pd.to_datetime(["2022-09-07", "2022-09-07"]),
+                "split_train_end": pd.to_datetime(["2025-09-11", "2025-09-11"]),
+                "split_validation_start": pd.to_datetime(["2025-09-22", "2025-09-22"]),
+                "split_validation_end": pd.to_datetime(["2026-03-23", "2026-03-23"]),
+                "split_test_start": pd.to_datetime(["2026-04-01", "2026-04-01"]),
+                "split_test_end": pd.to_datetime(["2026-04-07", "2026-04-08"]),
+            }
+        )
+
+    monkeypatch.setattr(
+        "stockmachine.apps.run_us_equities_paper.generate_walk_forward_predictions",
+        _fake_generate_walk_forward_predictions,
+    )
+
+    model = SilverWalkForwardSignalModel(dataset_cache=cache, model_name="extra_trees", horizon_bars=5)
+    signals = model.predict(date(2026, 4, 9), ["AAPL"])
+
+    assert len(signals) == 1
+    assert signals[0].symbol == "AAPL"
+    assert signals[0].meta["prediction_date"] == "2026-04-07"
+    assert model.last_prediction_context == {
+        "prediction_date": "2026-04-07",
+        "split_fold_index": 8,
+        "split_anchor_date": "2026-04-01",
+        "training_window": {"start": "2022-09-07", "end": "2025-09-11"},
+        "validation_window": {"start": "2025-09-22", "end": "2026-03-23"},
+        "prediction_window": {"start": "2026-04-01", "end": "2026-04-07"},
     }
 
 
