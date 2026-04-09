@@ -256,6 +256,7 @@ def build_point_in_time_metadata_history(
     active_only: bool = True,
     require_snapshot: bool = False,
     universe_name: str | None = DEFAULT_RESEARCH_UNIVERSE_NAME,
+    requested_symbols: tuple[str, ...] | list[str] | set[str] | None = None,
 ) -> pd.DataFrame:
     """Build one date-aware metadata panel for research-frame joins."""
 
@@ -270,6 +271,7 @@ def build_point_in_time_metadata_history(
         industry_membership_frame=industry_membership_frame,
         active_only=active_only,
         universe_name=universe_name,
+        requested_symbols=requested_symbols,
     )
     if len(covered_dates) == len(requested_dates):
         return fast_path
@@ -288,6 +290,7 @@ def build_point_in_time_metadata_history(
             active_only=active_only,
             require_snapshot=require_snapshot,
             universe_name=universe_name,
+            requested_symbols=requested_symbols,
         )
         if not carried_history.empty:
             frames.append(carried_history)
@@ -545,6 +548,19 @@ def _normalize_requested_metadata_dates(
     )
 
 
+def _normalize_requested_symbols(
+    requested_symbols: tuple[str, ...] | list[str] | set[str] | None,
+) -> pd.Index:
+    if not requested_symbols:
+        return pd.Index([], dtype="object")
+    return pd.Index(
+        pd.Series([str(symbol).upper() for symbol in requested_symbols if str(symbol).strip()], dtype="object")
+        .dropna()
+        .drop_duplicates()
+        .sort_values()
+    )
+
+
 def _build_partial_exact_snapshot_metadata_history(
     session_dates: list[pd.Timestamp],
     *,
@@ -553,6 +569,7 @@ def _build_partial_exact_snapshot_metadata_history(
     industry_membership_frame: pd.DataFrame,
     active_only: bool,
     universe_name: str | None,
+    requested_symbols: tuple[str, ...] | list[str] | set[str] | None,
 ) -> tuple[pd.DataFrame, pd.Index]:
     if symbol_master_frame.empty:
         return _empty_research_metadata_frame(), pd.Index([], dtype="datetime64[ns]")
@@ -561,17 +578,45 @@ def _build_partial_exact_snapshot_metadata_history(
     symbol_master["as_of_date"] = pd.to_datetime(symbol_master["as_of_date"], errors="coerce").dt.normalize()
     symbol_master = symbol_master.dropna(subset=["as_of_date"]).copy()
     requested_dates = _normalize_requested_metadata_dates(session_dates)
+    requested_symbol_index = _normalize_requested_symbols(requested_symbols)
     covered_dates = requested_dates.intersection(_available_snapshot_dates(symbol_master, date_column="as_of_date"))
+    if not requested_symbol_index.empty:
+        covered_dates = covered_dates.intersection(
+            _available_snapshot_dates_with_symbol_coverage(
+                symbol_master,
+                date_column="as_of_date",
+                symbol_column="symbol",
+                requested_symbols=requested_symbol_index,
+            )
+        )
 
     if universe_membership_frame is not None and not universe_membership_frame.empty:
         covered_dates = covered_dates.intersection(
             _available_snapshot_dates(universe_membership_frame, date_column="session_date")
         )
+        if not requested_symbol_index.empty:
+            covered_dates = covered_dates.intersection(
+                _available_snapshot_dates_with_symbol_coverage(
+                    universe_membership_frame,
+                    date_column="session_date",
+                    symbol_column="symbol",
+                    requested_symbols=requested_symbol_index,
+                )
+            )
 
     if not industry_membership_frame.empty:
         covered_dates = covered_dates.intersection(
             _available_snapshot_dates(industry_membership_frame, date_column="as_of_date")
         )
+        if not requested_symbol_index.empty:
+            covered_dates = covered_dates.intersection(
+                _available_snapshot_dates_with_symbol_coverage(
+                    industry_membership_frame,
+                    date_column="as_of_date",
+                    symbol_column="symbol",
+                    requested_symbols=requested_symbol_index,
+                )
+            )
 
     if covered_dates.empty:
         return _empty_research_metadata_frame(), covered_dates
@@ -664,7 +709,22 @@ def _build_carried_snapshot_metadata_history(
     active_only: bool,
     require_snapshot: bool,
     universe_name: str | None,
+    requested_symbols: tuple[str, ...] | list[str] | set[str] | None,
 ) -> pd.DataFrame:
+    requested_symbol_index = _normalize_requested_symbols(requested_symbols)
+    if not requested_symbol_index.empty:
+        requested_set = set(requested_symbol_index.astype(str))
+        symbol_master_frame = symbol_master_frame.loc[
+            symbol_master_frame["symbol"].astype(str).str.upper().isin(requested_set)
+        ].copy()
+        industry_membership_frame = industry_membership_frame.loc[
+            industry_membership_frame["symbol"].astype(str).str.upper().isin(requested_set)
+        ].copy()
+        if universe_membership_frame is not None and not universe_membership_frame.empty:
+            universe_membership_frame = universe_membership_frame.loc[
+                universe_membership_frame["symbol"].astype(str).str.upper().isin(requested_set)
+            ].copy()
+
     frames: list[pd.DataFrame] = []
     for session_date in session_dates:
         snapshot = resolve_point_in_time_universe(
@@ -692,6 +752,36 @@ def _available_snapshot_dates(frame: pd.DataFrame, *, date_column: str) -> pd.In
     if isinstance(snapshot_dates, pd.Series):
         snapshot_dates = snapshot_dates.dt.normalize()
     return pd.Index(snapshot_dates.dropna().drop_duplicates().sort_values())
+
+
+def _available_snapshot_dates_with_symbol_coverage(
+    frame: pd.DataFrame,
+    *,
+    date_column: str,
+    symbol_column: str,
+    requested_symbols: pd.Index,
+) -> pd.Index:
+    if (
+        frame.empty
+        or date_column not in frame.columns
+        or symbol_column not in frame.columns
+        or requested_symbols.empty
+    ):
+        return pd.Index([], dtype="datetime64[ns]")
+
+    working = frame.copy()
+    working[date_column] = pd.to_datetime(working[date_column], errors="coerce").dt.normalize()
+    working[symbol_column] = working[symbol_column].astype(str).str.upper()
+    working = working.dropna(subset=[date_column, symbol_column]).copy()
+    if working.empty:
+        return pd.Index([], dtype="datetime64[ns]")
+
+    required_symbols = set(requested_symbols.astype(str))
+    covered_dates: list[pd.Timestamp] = []
+    for snapshot_date, symbols in working.groupby(date_column, sort=True)[symbol_column]:
+        if required_symbols.issubset(set(symbols.astype(str))):
+            covered_dates.append(pd.Timestamp(snapshot_date))
+    return pd.Index(covered_dates, dtype="datetime64[ns]")
 
 
 def _placeholder_metadata_from_membership(frame: pd.DataFrame, *, session_date: pd.Timestamp) -> pd.DataFrame:

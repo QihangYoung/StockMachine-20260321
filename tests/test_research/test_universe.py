@@ -510,3 +510,121 @@ def test_build_point_in_time_metadata_history_only_falls_back_for_missing_dates(
     ]
     jan6 = history.loc[history["date"] == pd.Timestamp("2025-01-06")].iloc[0]
     assert jan6["company_name"] == "Apple Day 3"
+
+
+def test_build_point_in_time_metadata_history_falls_back_when_exact_snapshot_misses_requested_symbols() -> None:
+    symbol_master = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "AAPL",
+                "security_id": "AAPL",
+                "company_name": "Apple",
+                "exchange_mic": "XNAS",
+                "currency": "USD",
+                "security_type": "COMMON_STOCK",
+                "asset_class": "EQUITY",
+                "is_active": True,
+                "list_date": "2010-01-01",
+                "delist_date": None,
+                "sector": None,
+                "industry": None,
+                "country_of_listing": "US",
+                "primary_share_class": True,
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "MSFT",
+                "security_id": "MSFT",
+                "company_name": "Microsoft",
+                "exchange_mic": "XNAS",
+                "currency": "USD",
+                "security_type": "COMMON_STOCK",
+                "asset_class": "EQUITY",
+                "is_active": True,
+                "list_date": "1986-03-13",
+                "delist_date": None,
+                "sector": None,
+                "industry": None,
+                "country_of_listing": "US",
+                "primary_share_class": True,
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-03",
+                "symbol": "GLD",
+                "security_id": "GLD",
+                "company_name": "SPDR Gold Shares",
+                "exchange_mic": "ARCX",
+                "currency": "USD",
+                "security_type": "ETF",
+                "asset_class": "ETF",
+                "is_active": True,
+                "list_date": "2004-11-18",
+                "delist_date": None,
+                "sector": None,
+                "industry": None,
+                "country_of_listing": "US",
+                "primary_share_class": True,
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-03T22:00:00+00:00",
+                "source_version": "v2",
+            },
+        ]
+    )
+    industry_membership = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "AAPL",
+                "industry_system": "gics",
+                "sector_name": "Technology",
+                "industry_group_name": "Technology",
+                "industry_name": "Hardware",
+                "subindustry_name": "Computers",
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-02",
+                "symbol": "MSFT",
+                "industry_system": "gics",
+                "sector_name": "Technology",
+                "industry_group_name": "Technology",
+                "industry_name": "Software",
+                "subindustry_name": "Applications",
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-02T22:00:00+00:00",
+                "source_version": "v1",
+            },
+            {
+                "as_of_date": "2025-01-03",
+                "symbol": "GLD",
+                "industry_system": "gics",
+                "sector_name": "Materials",
+                "industry_group_name": "Materials",
+                "industry_name": "Gold",
+                "subindustry_name": "Gold",
+                "source_name": "bootstrap",
+                "load_time_utc": "2025-01-03T22:00:00+00:00",
+                "source_version": "v2",
+            },
+        ]
+    )
+
+    history = build_point_in_time_metadata_history(
+        pd.Index([pd.Timestamp("2025-01-03")]),
+        symbol_master_frame=symbol_master,
+        industry_membership_frame=industry_membership,
+        requested_symbols=("AAPL", "MSFT"),
+    )
+
+    assert set(history["symbol"]) == {"AAPL", "MSFT"}
+    assert set(history["sector"]) == {"Technology"}
+    assert set(history["industry"]) == {"Hardware", "Software"}
