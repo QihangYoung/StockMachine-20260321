@@ -11,6 +11,33 @@
 - `peer-comparison-backtest-protocol.md`: current full-model strict backtest protocol for external peer replication
 - `peer-comparison-backtest-setting.md`: external-facing strict backtest protocol for peer comparison
 - `project-status-2026-03-22.md`: current module progress, milestone state, and next recommended directions
+- `multi-asset-allocation-research-plan.md`: recommended first research path for ETF-based multi-asset allocation
+- `multi-asset-strategy-memo.md`: one-page memo focused only on strengthening the multi-asset allocation strategy itself
+- `multi-asset-robustness-window-memo.md`: why a long multi-regime backtest raises confidence but still does not prove robustness
+- `multi-asset-observation-gate-checklist.md`: 5-gate checklist for deciding whether a multi-asset strategy is robust enough for controlled observation
+- `c-policy-multi-asset-review-20260408.md`: gate-based review of the current `Benchmark C Policy` as a standalone multi-asset strategy
+- `c2-risk-budget-core-experiment-spec.md`: experiment spec for rebuilding `C policy` into a bucket-based `ERC` / risk-budget multi-asset core
+- `c2-risk-budget-sweep-20260409.md`: first disciplined regional sweep around `C2 v0`, including the new periodic-rebalance `current C` baseline
+- `c2-risk-budget-frontier-sweep-20260409.md`: second-stage frontier sweep testing lower credit and higher equity regions around the strongest `C2` zone
+- `c2-implementation-sweep-20260409.md`: implementation-layer test of `cash reserve` and threshold-aware rebalance around the current lead `C2` candidate
+- `c2-candidate-triage-20260409.md`: retain/observe/de-prioritize triage for the current `C2` candidate set
+- `fmf-validation-rebuild-memo-20260409.md`: why the validation architecture is being rebuilt around `FMF`, which ETF universe is now frozen, and how the new validation/test split should be cut
+- `validation-rebuild-status-note-20260409.md`: why the provisional `FMF` rebuild split is still clearly better than the previous de facto all-validation `2018 ~ 2026` setup
+- `fmf-test-lockbox-protocol-20260409.md`: hard rule that routine `FMF` research runs must stay on validation only and that the `2020-01-02 ~ 2026-04-08` test window is now a lockbox
+- `fmf-validation-robustness-review-20260409.md`: first validation-only robustness review for the rebuilt `FMF` line, including shortlist freeze and why grid search should now stop
+- `fmf-validation-subperiod-review-20260409.md`: validation-internal block review of the frozen `FMF` shortlist, showing the trade-off between the new lead candidate and the more even seed policy
+- `fmf-candidate-compare-memo-20260409.md`: direct visual and monthly-distribution comparison of the seed, lead, and near-neighbor `FMF` candidates
+- `fmf-target-vol-10-spec-20260410.md`: first-pass spec for a long-only `0`-leverage multi-asset strategy targeting a `10%` volatility cap with Sharpe as the primary objective
+- `fmf-current-challenges-memo-20260409.md`: current major challenges in the rebuilt `FMF` validation line, including why regime nonstationarity is the main contradiction but not the only one
+- `fmf-regime-aware-adaptation-memo-20260409.md`: constrained proposal for a regime-aware overlay, including which top-level knobs may move and which should remain frozen
+- `fmf-regime-overlay-v1-review-20260409.md`: first validation-only review of a conservative regime-aware overlay, showing that the prototype slightly lifted return but did not beat the static lead on Sharpe
+- `fmf-regime-overlay-v2-review-20260409.md`: detector-sensitivity follow-up showing that better `2018 Q4` recognition materially changed policy application but still did not beat the static lead
+- `fmf-regime-detector-vnext-spec-20260409.md`: design spec for a multi-signal, probability-style `FMF` regime detector with a still-thin action layer
+- `fmf-regime-vnext-review-20260409.md`: first validation-only review of the multi-signal score-based detector, showing that the architecture is viable but still does not beat the static lead
+- `dynamic-sleeve-growth-engine-observation-20260416.md`: validation-only observation that dynamic sleeve behavior depends strongly on the growth engine, including `SPY`, `VGT`, and `SOXX` comparisons
+- `multi-asset-bucket-covariance-spec.md`: frozen first-pass bucket definitions, ETF representatives, and covariance-estimation defaults for `C 2.0`
+- `strategy-metric-frequency-convention.md`: frozen rule for which Sharpe frequency is primary for `h5`, `h1`, and multi-asset strategies
+- `post-hoc-hypothesis-discipline-memo.md`: rule for using backtest results to generate the next experiment without turning the same sample into final strategy truth
 - `backlog.md`: prioritized implementation backlog and delivery gates
 - `merge-guide.md`: integration map, contract boundaries, and merge checklist for external contributors
 - `canonical-schemas.md`: internal silver-table contracts and key fields

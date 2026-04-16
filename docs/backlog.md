@@ -156,6 +156,8 @@ The project should pass these gates in order:
 - add capacity analysis
 - add delayed execution sensitivity tests
 - add parameter stability sweeps
+- add daily marked-to-market risk panel for `h5` so contract-level `5-session`
+  Sharpe and daily risk metrics are both available
 
 ### Operational Readiness
 
@@ -171,6 +173,17 @@ The project should pass these gates in order:
 - model comparison dashboard or report pack
 - monitoring and audit baseline
 - production-readiness checklist
+
+### Parallel Research Thread: Multi-Asset Allocation
+
+- define the first multi-asset line as a separate ETF-based strategy project
+- freeze a small explicit cross-asset ETF universe and bucket map
+- reuse white-box portfolio and risk contracts, but do not overload the
+  current sector-based equity policy
+- compare static baselines, white-box tactical allocation, and core-plus-sleeve
+  variants before adding model-heavy allocation logic
+- require the same strict walk-forward, cost-stress, and robustness discipline
+  used by the current equity line
 
 ## Suggested Build Order
 

@@ -11,6 +11,35 @@ from stockmachine.ingestion.storage import StorageLayout, write_jsonl
 from stockmachine.research.universe import DEFAULT_RESEARCH_UNIVERSE_NAME
 from stockmachine.research.us_equities_baseline import BENCHMARK_SYMBOL, DEFAULT_UNIVERSE
 
+DEFAULT_MULTI_ASSET_ETF_UNIVERSE_NAME = "us_multi_asset_etfs_v1"
+DEFAULT_MULTI_ASSET_ETF_SYMBOLS: tuple[str, ...] = (
+    "SPY",
+    "VXUS",
+    "AGG",
+    "IEF",
+    "LQD",
+    "GLDM",
+    "CTA",
+    "SGOV",
+)
+DEFAULT_MULTI_ASSET_PROXY_UNIVERSE_NAME = "us_multi_asset_proxy_etfs_v1"
+DEFAULT_MULTI_ASSET_PROXY_SYMBOLS: tuple[str, ...] = (
+    "FMF",
+    "DBMF",
+    "BIL",
+    "GLD",
+)
+DEFAULT_FMF_VALIDATION_UNIVERSE_NAME = "us_multi_asset_fmf_validation_v1"
+DEFAULT_FMF_VALIDATION_SYMBOLS: tuple[str, ...] = (
+    "SPY",
+    "VXUS",
+    "IEF",
+    "LQD",
+    "GLD",
+    "FMF",
+    "BIL",
+)
+
 
 def bootstrap_us_equities_yahoo_to_silver(
     *,
@@ -21,17 +50,115 @@ def bootstrap_us_equities_yahoo_to_silver(
 ) -> dict[str, int]:
     """Bootstrap canonical silver tables from Yahoo Finance for research."""
 
+    return bootstrap_market_symbols_yahoo_to_silver(
+        symbols=tuple(list(DEFAULT_UNIVERSE) + [BENCHMARK_SYMBOL]),
+        metadata_symbols=tuple(DEFAULT_UNIVERSE),
+        start=start,
+        end=end,
+        layout=layout,
+        silver_file_stem=silver_file_stem,
+        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        membership_source="yahoo_bootstrap",
+        benchmark_symbols=(BENCHMARK_SYMBOL,),
+    )
+
+
+def bootstrap_multi_asset_etfs_yahoo_to_silver(
+    *,
+    start: str = "2018-01-01",
+    end: str = "2026-12-31",
+    layout: StorageLayout | None = None,
+    silver_file_stem: str = "multi_asset_etf_bootstrap",
+) -> dict[str, int]:
+    """Bootstrap the default multi-asset ETF universe into canonical silver tables."""
+
+    return bootstrap_market_symbols_yahoo_to_silver(
+        symbols=DEFAULT_MULTI_ASSET_ETF_SYMBOLS,
+        metadata_symbols=DEFAULT_MULTI_ASSET_ETF_SYMBOLS,
+        start=start,
+        end=end,
+        layout=layout,
+        silver_file_stem=silver_file_stem,
+        universe_name=DEFAULT_MULTI_ASSET_ETF_UNIVERSE_NAME,
+        membership_source="multi_asset_etf_bootstrap",
+        benchmark_symbols=(BENCHMARK_SYMBOL,),
+    )
+
+
+def bootstrap_multi_asset_proxy_etfs_yahoo_to_silver(
+    *,
+    start: str = "2018-01-01",
+    end: str = "2026-12-31",
+    layout: StorageLayout | None = None,
+    silver_file_stem: str = "multi_asset_proxy_bootstrap",
+) -> dict[str, int]:
+    """Bootstrap the default proxy ETF set used in long-window multi-asset research."""
+
+    return bootstrap_market_symbols_yahoo_to_silver(
+        symbols=DEFAULT_MULTI_ASSET_PROXY_SYMBOLS,
+        metadata_symbols=DEFAULT_MULTI_ASSET_PROXY_SYMBOLS,
+        start=start,
+        end=end,
+        layout=layout,
+        silver_file_stem=silver_file_stem,
+        universe_name=DEFAULT_MULTI_ASSET_PROXY_UNIVERSE_NAME,
+        membership_source="multi_asset_proxy_bootstrap",
+        benchmark_symbols=(),
+    )
+
+
+def bootstrap_fmf_validation_etfs_yahoo_to_silver(
+    *,
+    start: str = "2013-08-01",
+    end: str = "2026-12-31",
+    layout: StorageLayout | None = None,
+    silver_file_stem: str = "fmf_validation_etf_bootstrap",
+) -> dict[str, int]:
+    """Bootstrap the ETF universe used by the FMF-based validation rebuild."""
+
+    return bootstrap_market_symbols_yahoo_to_silver(
+        symbols=DEFAULT_FMF_VALIDATION_SYMBOLS,
+        metadata_symbols=DEFAULT_FMF_VALIDATION_SYMBOLS,
+        start=start,
+        end=end,
+        layout=layout,
+        silver_file_stem=silver_file_stem,
+        universe_name=DEFAULT_FMF_VALIDATION_UNIVERSE_NAME,
+        membership_source="fmf_validation_etf_bootstrap",
+        benchmark_symbols=(BENCHMARK_SYMBOL,),
+    )
+
+
+def bootstrap_market_symbols_yahoo_to_silver(
+    *,
+    symbols: tuple[str, ...] | list[str],
+    metadata_symbols: tuple[str, ...] | list[str] | None = None,
+    start: str,
+    end: str,
+    layout: StorageLayout | None = None,
+    silver_file_stem: str = "yahoo_bootstrap",
+    universe_name: str = DEFAULT_RESEARCH_UNIVERSE_NAME,
+    membership_source: str = "yahoo_bootstrap",
+    benchmark_symbols: tuple[str, ...] | list[str] = (BENCHMARK_SYMBOL,),
+) -> dict[str, int]:
+    """Bootstrap canonical silver tables from Yahoo Finance for an arbitrary symbol set."""
+
     storage = layout or StorageLayout()
-    tickers = list(DEFAULT_UNIVERSE) + [BENCHMARK_SYMBOL]
-    price_data = _download_history(tickers=tickers, start=start, end=end)
-    metadata = _download_metadata(symbols=list(DEFAULT_UNIVERSE))
+    resolved_symbols = tuple(dict.fromkeys(str(symbol) for symbol in symbols))
+    resolved_metadata_symbols = tuple(
+        dict.fromkeys(str(symbol) for symbol in (metadata_symbols or resolved_symbols))
+    )
+    resolved_benchmark_symbols = tuple(dict.fromkeys(str(symbol) for symbol in benchmark_symbols))
+
+    price_data = _download_history(tickers=list(resolved_symbols), start=start, end=end)
+    metadata = _download_metadata(symbols=list(resolved_metadata_symbols))
     load_time_utc = datetime.now(timezone.utc).isoformat()
     snapshot_date = str(pd.to_datetime(price_data["date"]).max().date())
 
     raw_dir = storage.raw_stream_dir("yahoo_finance", "bootstrap")
     raw_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(raw_dir / "price_data.jsonl", price_data.to_dict(orient="records"))
-    write_jsonl(raw_dir / "metadata.jsonl", metadata.to_dict(orient="records"))
+    write_jsonl(raw_dir / f"{silver_file_stem}_price_data.jsonl", price_data.to_dict(orient="records"))
+    write_jsonl(raw_dir / f"{silver_file_stem}_metadata.jsonl", metadata.to_dict(orient="records"))
 
     symbol_master_rows = _build_symbol_master_rows(metadata, snapshot_date=snapshot_date, load_time_utc=load_time_utc)
     industry_rows = _build_industry_rows(metadata, snapshot_date=snapshot_date, load_time_utc=load_time_utc)
@@ -39,11 +166,15 @@ def bootstrap_us_equities_yahoo_to_silver(
         metadata,
         session_date=snapshot_date,
         load_time_utc=load_time_utc,
-        universe_name=DEFAULT_RESEARCH_UNIVERSE_NAME,
+        universe_name=universe_name,
         source_version="bootstrap_v1",
-        membership_source="yahoo_bootstrap",
+        membership_source=membership_source,
     )
-    daily_rows, benchmark_rows, adj_factor_rows = _build_bar_rows(price_data, load_time_utc=load_time_utc)
+    daily_rows, benchmark_rows, adj_factor_rows = _build_bar_rows(
+        price_data,
+        load_time_utc=load_time_utc,
+        benchmark_symbols=resolved_benchmark_symbols,
+    )
 
     target_filename = f"{silver_file_stem}.jsonl"
     write_jsonl(storage.silver_table_dir("symbol_master") / target_filename, symbol_master_rows)
@@ -55,6 +186,9 @@ def bootstrap_us_equities_yahoo_to_silver(
 
     return {
         "silver_file_stem": silver_file_stem,
+        "symbol_count": len(resolved_symbols),
+        "metadata_symbol_count": len(resolved_metadata_symbols),
+        "benchmark_symbol_count": len(resolved_benchmark_symbols),
         "symbol_master_rows": len(symbol_master_rows),
         "industry_membership_rows": len(industry_rows),
         "universe_membership_rows": len(universe_rows),
@@ -312,7 +446,7 @@ def _build_symbol_master_rows(
                 "company_name": row.company_name,
                 "exchange_mic": _map_exchange(row.exchange),
                 "currency": row.currency,
-                "security_type": "COMMON_STOCK",
+                "security_type": _resolve_security_type(row.quote_type),
                 "asset_class": row.quote_type,
                 "is_active": True,
                 "list_date": None,
@@ -460,10 +594,12 @@ def _build_bar_rows(
     price_data: pd.DataFrame,
     *,
     load_time_utc: str,
+    benchmark_symbols: tuple[str, ...] | list[str] = (BENCHMARK_SYMBOL,),
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     daily_rows = []
     benchmark_rows = []
     adj_factor_rows = []
+    benchmark_symbol_set = {str(symbol) for symbol in benchmark_symbols}
 
     for row in price_data.itertuples(index=False):
         if any(pd.isna(value) for value in (row.open, row.high, row.low, row.close, row.volume)):
@@ -499,7 +635,7 @@ def _build_bar_rows(
                 "source_version": "bootstrap_v1",
             }
         )
-        if row.symbol == BENCHMARK_SYMBOL:
+        if row.symbol in benchmark_symbol_set:
             benchmark_rows.append(
                 {
                     **common,
@@ -527,3 +663,14 @@ def _map_exchange(raw_value: str) -> str:
         "NAS": "XNAS",
     }
     return mapping.get(raw_value, raw_value)
+
+
+def _resolve_security_type(raw_quote_type: str) -> str:
+    normalized = str(raw_quote_type or "").strip().lower()
+    if "etf" in normalized:
+        return "ETF"
+    if "fund" in normalized:
+        return "FUND"
+    if "index" in normalized:
+        return "INDEX"
+    return "COMMON_STOCK"

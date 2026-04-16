@@ -22,6 +22,21 @@ class RobustnessFrameworkSpec:
 
 
 _ROBUSTNESS_FRAMEWORKS: dict[str, RobustnessFrameworkSpec] = {
+    "multi_asset_fmf_validation": RobustnessFrameworkSpec(
+        framework_id="multi_asset_fmf_validation_robustness_v1",
+        strategy_project="multi_asset_fmf_validation",
+        default_horizon=1,
+        attribution_date_column="entry_date",
+        tail_return_column="net_return",
+        tail_trim_counts=(1, 5, 10),
+        cost_stress_levels=(5.0, 10.0, 20.0, 40.0),
+        parameter_neighborhood_radius=1,
+        run_parameter_stability_by_default=False,
+        gate_defaults={
+            "max_top5_day_contribution_share": 0.5,
+            "min_positive_year_ratio": 0.5,
+        },
+    ),
     "us_equities_h5": RobustnessFrameworkSpec(
         framework_id="us_equities_h5_robustness_v1",
         strategy_project="us_equities_h5",

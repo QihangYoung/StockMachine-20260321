@@ -269,6 +269,220 @@ class BenchmarkTrendDrawdownVolCrossAssetRegimeDetector:
 
 
 @dataclass(slots=True, frozen=True)
+class MultiSignalBucketScoreRegimeDetector:
+    """Probability-style white-box detector for a bucketed multi-asset universe."""
+
+    benchmark_column: str = "equity_us"
+    duration_column: str = "duration"
+    credit_column: str = "credit"
+    inflation_column: str = "inflation_hedge"
+    trend_column: str = "trend"
+    trend_lookback_windows: int = 84
+    relative_lookback_windows: int = 63
+    vol_lookback_windows: int = 42
+    correlation_lookback_windows: int = 63
+    normalization_lookback_windows: int = 126
+    score_smoothing_halflife: float = 10.0
+    horizon_sessions: int = 1
+    risk_on_min_score: float = 0.30
+    defensive_min_score: float = 0.30
+    risk_on_net_threshold: float = 0.02
+    defensive_net_threshold: float = -0.02
+
+    def label_frame(
+        self,
+        frame: pd.DataFrame,
+        *,
+        return_column: str = "benchmark_return",
+        date_column: str = "entry_date",
+    ) -> pd.DataFrame:
+        del return_column
+        required_columns = {
+            date_column,
+            self.benchmark_column,
+            self.duration_column,
+            self.credit_column,
+            self.inflation_column,
+            self.trend_column,
+        }
+        missing_columns = sorted(required_columns.difference(frame.columns))
+        if missing_columns:
+            raise KeyError(f"Missing multi-signal regime columns: {missing_columns}")
+        if self.trend_lookback_windows <= 1:
+            raise ValueError("trend_lookback_windows must be greater than 1.")
+        if self.relative_lookback_windows <= 1:
+            raise ValueError("relative_lookback_windows must be greater than 1.")
+        if self.vol_lookback_windows <= 1:
+            raise ValueError("vol_lookback_windows must be greater than 1.")
+        if self.correlation_lookback_windows <= 1:
+            raise ValueError("correlation_lookback_windows must be greater than 1.")
+        if self.normalization_lookback_windows <= 5:
+            raise ValueError("normalization_lookback_windows must be greater than 5.")
+        if self.score_smoothing_halflife <= 0.0:
+            raise ValueError("score_smoothing_halflife must be positive.")
+        if self.horizon_sessions <= 0:
+            raise ValueError("horizon_sessions must be positive.")
+
+        dates = pd.to_datetime(frame[date_column], errors="coerce").reset_index(drop=True)
+        equity_returns = pd.Series(frame[self.benchmark_column], dtype=float).reset_index(drop=True)
+        duration_returns = pd.Series(frame[self.duration_column], dtype=float).reset_index(drop=True)
+        credit_returns = pd.Series(frame[self.credit_column], dtype=float).reset_index(drop=True)
+        inflation_returns = pd.Series(frame[self.inflation_column], dtype=float).reset_index(drop=True)
+        trend_returns = pd.Series(frame[self.trend_column], dtype=float).reset_index(drop=True)
+
+        lagged_equity_trailing_return = _lagged_compounded_return(
+            equity_returns,
+            self.trend_lookback_windows,
+        )
+        lagged_duration_trailing_return = _lagged_compounded_return(
+            duration_returns,
+            self.relative_lookback_windows,
+        )
+        lagged_credit_trailing_return = _lagged_compounded_return(
+            credit_returns,
+            self.relative_lookback_windows,
+        )
+        lagged_inflation_trailing_return = _lagged_compounded_return(
+            inflation_returns,
+            self.relative_lookback_windows,
+        )
+        lagged_trend_trailing_return = _lagged_compounded_return(
+            trend_returns,
+            self.relative_lookback_windows,
+        )
+        lagged_equity_duration_relative = (
+            _lagged_compounded_return(equity_returns, self.relative_lookback_windows)
+            - lagged_duration_trailing_return
+        )
+        lagged_credit_duration_relative = lagged_credit_trailing_return - lagged_duration_trailing_return
+
+        lagged_equity_drawdown = _lagged_drawdown(equity_returns)
+        lagged_realized_vol = _lagged_realized_vol_annualized(
+            equity_returns,
+            lookback_windows=self.vol_lookback_windows,
+            horizon_sessions=self.horizon_sessions,
+        )
+        lagged_equity_duration_correlation = (
+            equity_returns.rolling(
+                self.correlation_lookback_windows,
+                min_periods=self.correlation_lookback_windows,
+            )
+            .corr(duration_returns)
+            .shift(1)
+        )
+
+        equity_trend_score = _bounded_lagged_zscore(
+            lagged_equity_trailing_return,
+            self.normalization_lookback_windows,
+        )
+        equity_duration_relative_score = _bounded_lagged_zscore(
+            lagged_equity_duration_relative,
+            self.normalization_lookback_windows,
+        )
+        credit_duration_relative_score = _bounded_lagged_zscore(
+            lagged_credit_duration_relative,
+            self.normalization_lookback_windows,
+        )
+        inflation_pressure_score = _bounded_lagged_zscore(
+            lagged_inflation_trailing_return,
+            self.normalization_lookback_windows,
+        )
+        trend_support_score = _bounded_lagged_zscore(
+            lagged_trend_trailing_return,
+            self.normalization_lookback_windows,
+        )
+        drawdown_pressure_score = _bounded_lagged_zscore(
+            (-lagged_equity_drawdown).clip(lower=0.0),
+            self.normalization_lookback_windows,
+        )
+        volatility_pressure_score = _bounded_lagged_zscore(
+            lagged_realized_vol,
+            self.normalization_lookback_windows,
+        )
+        correlation_pressure_score = _bounded_lagged_zscore(
+            lagged_equity_duration_correlation,
+            self.normalization_lookback_windows,
+        )
+
+        risk_on_raw = (
+            0.30 * equity_trend_score.clip(lower=0.0)
+            + 0.25 * equity_duration_relative_score.clip(lower=0.0)
+            + 0.20 * credit_duration_relative_score.clip(lower=0.0)
+            + 0.15 * trend_support_score.clip(lower=0.0)
+            + 0.10 * (-correlation_pressure_score).clip(lower=0.0)
+        )
+        defensive_raw = (
+            0.25 * drawdown_pressure_score.clip(lower=0.0)
+            + 0.20 * volatility_pressure_score.clip(lower=0.0)
+            + 0.20 * correlation_pressure_score.clip(lower=0.0)
+            + 0.15 * (-equity_trend_score).clip(lower=0.0)
+            + 0.10 * (-credit_duration_relative_score).clip(lower=0.0)
+            + 0.10 * inflation_pressure_score.clip(lower=0.0)
+        )
+
+        risk_on_score = risk_on_raw.ewm(
+            halflife=float(self.score_smoothing_halflife),
+            adjust=False,
+            min_periods=1,
+        ).mean()
+        defensive_score = defensive_raw.ewm(
+            halflife=float(self.score_smoothing_halflife),
+            adjust=False,
+            min_periods=1,
+        ).mean()
+        net_score = risk_on_score - defensive_score
+
+        history_windows = pd.Series(np.arange(len(frame)), dtype=int)
+        enough_history = history_windows >= max(
+            self.trend_lookback_windows,
+            self.relative_lookback_windows,
+            self.vol_lookback_windows,
+            self.correlation_lookback_windows,
+            self.normalization_lookback_windows,
+        )
+
+        labels = np.full(len(frame), "warmup", dtype=object)
+        labels[
+            enough_history
+            & (defensive_score >= float(self.defensive_min_score))
+            & (net_score <= float(self.defensive_net_threshold))
+        ] = "defensive"
+        labels[
+            enough_history
+            & (risk_on_score >= float(self.risk_on_min_score))
+            & (net_score >= float(self.risk_on_net_threshold))
+        ] = "risk_on"
+        labels[enough_history & (labels == "warmup")] = "neutral"
+
+        return pd.DataFrame(
+            {
+                date_column: dates,
+                "regime_label": labels,
+                "regime_equity_trailing_return": lagged_equity_trailing_return.astype(float),
+                "regime_equity_duration_relative": lagged_equity_duration_relative.astype(float),
+                "regime_credit_duration_relative": lagged_credit_duration_relative.astype(float),
+                "regime_inflation_trailing_return": lagged_inflation_trailing_return.astype(float),
+                "regime_trend_trailing_return": lagged_trend_trailing_return.astype(float),
+                "regime_drawdown": lagged_equity_drawdown.astype(float),
+                "regime_realized_vol_annualized": lagged_realized_vol.astype(float),
+                "regime_equity_duration_correlation": lagged_equity_duration_correlation.astype(float),
+                "regime_equity_trend_score": equity_trend_score.astype(float),
+                "regime_equity_duration_relative_score": equity_duration_relative_score.astype(float),
+                "regime_credit_duration_relative_score": credit_duration_relative_score.astype(float),
+                "regime_inflation_pressure_score": inflation_pressure_score.astype(float),
+                "regime_trend_support_score": trend_support_score.astype(float),
+                "regime_drawdown_pressure_score": drawdown_pressure_score.astype(float),
+                "regime_volatility_pressure_score": volatility_pressure_score.astype(float),
+                "regime_correlation_pressure_score": correlation_pressure_score.astype(float),
+                "regime_risk_on_score": risk_on_score.astype(float),
+                "regime_defensive_score": defensive_score.astype(float),
+                "regime_net_score": net_score.astype(float),
+                "regime_history_windows": history_windows.astype(int),
+            }
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class BenchmarkForwardRegimeLabeler:
     """Create strategy-independent market labels from future benchmark paths."""
 
@@ -415,3 +629,46 @@ def _lagged_cross_asset_signal(returns: pd.DataFrame, lookback_windows: int) -> 
     compounded = (1.0 + returns).rolling(lookback_windows, min_periods=lookback_windows).apply(np.prod, raw=True) - 1.0
     mean_signal = compounded.mean(axis=1)
     return mean_signal.shift(1).astype(float)
+
+
+def _lagged_compounded_return(returns: pd.Series, lookback_windows: int) -> pd.Series:
+    return (
+        (1.0 + pd.Series(returns, dtype=float))
+        .rolling(lookback_windows, min_periods=lookback_windows)
+        .apply(np.prod, raw=True)
+        .sub(1.0)
+        .shift(1)
+        .astype(float)
+    )
+
+
+def _lagged_drawdown(returns: pd.Series) -> pd.Series:
+    lagged_equity = (1.0 + pd.Series(returns, dtype=float)).cumprod().shift(1).fillna(1.0)
+    lagged_peaks = lagged_equity.cummax()
+    return (lagged_equity / lagged_peaks - 1.0).astype(float)
+
+
+def _lagged_realized_vol_annualized(
+    returns: pd.Series,
+    *,
+    lookback_windows: int,
+    horizon_sessions: int,
+) -> pd.Series:
+    annualization = np.sqrt(252.0 / float(horizon_sessions))
+    return (
+        pd.Series(returns, dtype=float)
+        .rolling(lookback_windows, min_periods=lookback_windows)
+        .std(ddof=1)
+        .shift(1)
+        .mul(annualization)
+        .astype(float)
+    )
+
+
+def _bounded_lagged_zscore(series: pd.Series, lookback_windows: int) -> pd.Series:
+    numeric = pd.Series(series, dtype=float)
+    rolling_mean = numeric.rolling(lookback_windows, min_periods=lookback_windows).mean().shift(1)
+    rolling_std = numeric.rolling(lookback_windows, min_periods=lookback_windows).std(ddof=1).shift(1)
+    zscore = (numeric - rolling_mean) / rolling_std.replace(0.0, np.nan)
+    bounded = np.tanh(zscore / 2.0)
+    return pd.Series(bounded, index=numeric.index, dtype=float)
