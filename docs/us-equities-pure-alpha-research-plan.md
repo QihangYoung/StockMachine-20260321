@@ -79,6 +79,11 @@ A provisional Yahoo chart gap fill now covers the missing `2013-08-05` through
 Beta-window plumbing and coverage checks, but it is not yet the final
 survivorship-bias-free source for research claims.
 
+A provisional point-in-time membership artifact also exists for the validation
+window, built from lagged 20-session median dollar volume. It supports top500
+and current-top1000-scope mechanics, but not true full-market top1500/top2000/
+top3000 comparisons.
+
 The final test window must not be used for:
 
 - feature discovery
@@ -220,6 +225,8 @@ Phase 0 status as of `2026-04-17`:
   for `2016-01-04` through `2026-04-16`;
 - provisional Yahoo chart data fills `2013-08-05` through `2015-12-31` for
   current top1000 bootstrap symbols;
+- provisional validation-window membership artifacts were generated using
+  lagged 20-session median dollar volume;
 - the top1000 data backfill is suitable for Phase 1 data engineering and
   validation-only mechanics;
 - it is not a point-in-time historical universe and must be converted into
@@ -246,6 +253,18 @@ Current status:
   reconstruction;
 - adjusted factors remain provisional because complex corporate actions can
   diverge from Alpaca.
+
+Provisional membership status:
+
+- validation-window lagged-liquidity artifacts exist for `2013-08-05` through
+  `2019-12-31`;
+- membership uses trailing median dollar volume over `20` prior sessions with
+  at least `15` observations and a lagged `10 USD` price floor;
+- median liquidity-eligible count inside current top1000 scope is `744.5`;
+- top500 mechanics are supported inside the current top1000 scope;
+- top1000 is only a current-scope top1000 artifact, not a full-market
+  historical top1000;
+- top1500/top2000/top3000 remain blocked until broader data is backfilled.
 
 Required data:
 
@@ -395,6 +414,10 @@ The Phase 0 top1000 backfill should be treated as a raw data lake for Phase 1.
 The next module should derive daily topN and ADV-threshold membership from
 lagged trailing dollar volume, rather than reading `top1000_manifest.csv` as a
 fixed historical universe.
+
+The provisional Phase 0 membership artifact is acceptable as the template for
+that module, but Phase 1 should re-run it from a repeatable ingestion pipeline
+and with the final selected data source.
 
 ## Phase 2: Beta Estimation Layer
 

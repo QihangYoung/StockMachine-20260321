@@ -45,6 +45,13 @@ Provisional Yahoo gap-fill artifacts:
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_gapfill_daily_symbol_counts.csv`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_vs_alpaca_reconciliation_20160104_top120_summary.json`
 
+Provisional point-in-time universe feasibility artifacts:
+
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/phase0_provisional_pit_universe_feasibility_rollup.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/candidate_universe_daily_counts_validation.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/candidate_universe_feasibility_summary_validation.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/provisional_current_top1000_lagged_liquidity_membership_validation.csv.gz`
+
 ## Executive Decision
 
 At the start of this audit, current data was sufficient for a small mechanics
@@ -87,6 +94,11 @@ A provisional Yahoo chart gap fill now covers `2013-08-05` through
 `2015-12-31` for the current top1000 bootstrap symbols. This closes the
 calendar gap for data-engineering purposes, but it is not yet a final
 survivorship-bias-free institutional data source.
+
+Using the Yahoo gap fill plus Alpaca 2016+ bars, a provisional lagged-liquidity
+membership artifact now exists for the validation window. It is useful for
+Phase 1 plumbing and universe-construction mechanics, but it remains limited to
+the current top1000 bootstrap scope.
 
 ## Supplemental Top1000 Backfill
 
@@ -181,6 +193,58 @@ Interpretation:
   and beta-mechanics experiments;
 - it is not yet acceptable as the final source for production-grade pure-alpha
   claims.
+
+## Provisional Point-In-Time Universe Feasibility
+
+Purpose:
+
+Check whether the newly filled data can produce validation-only,
+session-scoped universe membership from lagged liquidity fields.
+
+Method:
+
+- validation window: `2013-08-05` through `2019-12-31`
+- source segments: provisional Yahoo gap fill through `2015-12-31`, Alpaca SIP
+  from `2016-01-04`
+- universe scope: current top1000 bootstrap symbols only
+- liquidity rule: trailing median dollar volume over `20` prior sessions
+- lag discipline: all liquidity and price filters use data available before
+  the membership date
+- minimum liquidity observations: `15`
+- lagged price floor: `10 USD`
+- beta warm-up proxy: at least `126` prior stock return observations
+- full beta-lookback proxy: at least `252` prior stock observations
+
+Result:
+
+| Item | Result |
+|---|---:|
+| validation sessions | `1,614` |
+| loaded daily rows | `1,303,236` |
+| loaded symbols | `886` |
+| eligible membership rows | `1,202,555` |
+| first nonzero membership date | `2013-08-26` |
+| median liquidity-eligible names | `744.5` |
+| median top500 membership count | `500.0` |
+| median current-scope top1000 membership count | `744.5` |
+| median `ADV >= 10M` count | `681.0` |
+| median `ADV >= 20M` count | `620.0` |
+| median `ADV >= 30M` count | `572.5` |
+| median `ADV >= 50M` count | `486.0` |
+| first beta-warmup-proxy date for `30/30` construction | `2014-02-04` |
+| first full-252-lookback-proxy date for `20/20` construction | `2014-08-05` |
+
+Interpretation:
+
+- top500 mechanics are supported inside the current top1000 bootstrap scope;
+- top1000 can be studied only as current-top1000-scope top1000, not as a true
+  full-market historical top1000;
+- top1500, top2000, and top3000 remain blocked because the current backfill has
+  only top1000 symbols;
+- ADV-threshold counts are informative inside the current top1000 scope, but do
+  not prove broad-market counts;
+- this artifact is a bridge into Phase 1 universe engineering, not a final
+  production universe.
 
 ## Table Coverage
 
@@ -283,16 +347,18 @@ The starting local data could not construct top500/top1000/top1500 U.S. stock
 universes because only 66 stock symbols had local daily bars.
 
 The supplemental Alpaca backfill improves this from 2016 onward. A provisional
-Yahoo gap fill now covers `2013-08-05` through `2015-12-31`, but a
-research-grade vendor source is still preferred before final claims.
+Yahoo gap fill now covers `2013-08-05` through `2015-12-31`, and a provisional
+lagged-liquidity membership artifact has been generated for validation.
+However, a research-grade vendor source is still preferred before final claims.
 
 Impact:
 
 - no final full-window broad high-liquidity universe selection yet
-- no final full-window universe breadth comparison yet
+- no final full-window universe breadth comparison beyond current top1000 scope
 - no production-grade claim until survivorship-bias-free data and corporate
   action quality are resolved
 - provisional Beta-window plumbing is now possible with Yahoo gap-fill data
+  and lagged-liquidity membership artifacts
 
 ### 2. Shortability data is missing
 
@@ -344,8 +410,12 @@ Answer:
 Partially.
 
 We can generate feasibility diagnostics for the existing 66-stock high-liquidity
-legacy basket. We cannot yet generate the intended broad high-liquidity
-universe candidates because broad daily price history is missing.
+legacy basket. We can also generate provisional lagged-liquidity membership
+inside the current top1000 bootstrap scope.
+
+We still cannot generate the intended full broad-market top1500/top2000/top3000
+universe candidates because the current broad backfill contains only top1000
+bootstrap symbols and is not survivorship-bias-free.
 
 ## Phase 1 Recommendation
 
