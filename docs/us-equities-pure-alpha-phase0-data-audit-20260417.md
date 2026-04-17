@@ -52,6 +52,14 @@ Provisional point-in-time universe feasibility artifacts:
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/candidate_universe_feasibility_summary_validation.csv`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_provisional_pit_universe_feasibility_20260417/provisional_current_top1000_lagged_liquidity_membership_validation.csv.gz`
 
+Productized Phase 0 utility artifacts:
+
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_pipeline_run_20260417.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_asset_class_qa_20260417/top1000_asset_class_qa_rollup.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_asset_class_qa_20260417/top1000_asset_class_review_queue.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_vendor_bakeoff_20260417/vendor_bakeoff_rollup.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_vendor_bakeoff_20260417/vendor_bakeoff_plan.md`
+
 ## Executive Decision
 
 At the start of this audit, current data was sufficient for a small mechanics
@@ -99,6 +107,17 @@ Using the Yahoo gap fill plus Alpaca 2016+ bars, a provisional lagged-liquidity
 membership artifact now exists for the validation window. It is useful for
 Phase 1 plumbing and universe-construction mechanics, but it remains limited to
 the current top1000 bootstrap scope.
+
+The repeatable Phase 0 utility is now available as:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase0 all
+```
+
+This command regenerates the provisional point-in-time universe artifacts,
+asset-class QA, and vendor bake-off files. It does not run alpha signals,
+portfolio returns, or test-window performance.
 
 ## Supplemental Top1000 Backfill
 
@@ -245,6 +264,75 @@ Interpretation:
   not prove broad-market counts;
 - this artifact is a bridge into Phase 1 universe engineering, not a final
   production universe.
+
+## Asset-Class QA
+
+Purpose:
+
+Check whether the current top1000 bootstrap list contains obvious non-stock
+instruments or names that require policy decisions before universe freeze.
+
+Result:
+
+| Item | Result |
+|---|---:|
+| symbols checked | `1,000` |
+| common-stock candidates | `907` |
+| review-required symbols | `96` |
+| blocked non-common-like symbols | `0` |
+| foreign / ADR-like review symbols | `90` |
+| trust / REIT-like review symbols | `3` |
+| class-share review symbols | `3` |
+
+Interpretation:
+
+- no obvious ETF/fund-like names were found in the selected top1000 after the
+  Phase 0 filters;
+- the main open policy question is whether ADRs and foreign issuers belong in
+  the final U.S. high-liquidity stock universe;
+- class-share names such as dotted symbols should be reviewed for duplicate
+  issuer exposure and data-vendor identifier handling;
+- this QA is metadata/name based and does not replace a research-grade security
+  master.
+
+## Vendor Bake-Off Artifacts
+
+The vendor bake-off matrix and acceptance checks are now written by the
+repeatable Phase 0 utility.
+
+Recommended order:
+
+| Priority | Vendor | Role |
+|---:|---|---|
+| `1` | Norgate Data | preferred independent-research source |
+| `2` | Sharadar / Nasdaq Data Link | preferred API-style source |
+| `3` | CRSP / WRDS | gold standard if accessible |
+| `4` | Polygon.io | API fallback |
+| `5` | QuantQuote / HistoricalData.net / EODHD | low-cost backup |
+| `6` | Yahoo / Stooq | sanity-check or provisional gap fill only |
+
+The decision rule is:
+
+Select the first vendor that passes survivorship-bias, adjustment,
+common-stock classification, `2013-2015` coverage, and repeatable-ingestion
+checks.
+
+Source notes:
+
+- Norgate states that it specializes in survivorship-bias-free data for U.S.,
+  Australian, and Canadian stock markets, and that delisted stocks / historical
+  index constituents require higher-tier U.S. stock subscriptions:
+  https://norgatedata.com/index.php/pricing/ and
+  https://norgatedata.com/data-content-tables.php
+- Nasdaq Data Link documents Sharadar table metadata, including equity prices,
+  tickers, actions, and events:
+  https://help.data.nasdaq.com/article/533-what-are-the-column-definitions-for-the-sharadar-data-feeds
+- CRSP via WRDS is the research-grade benchmark; CRSP daily stock data begins
+  in July 1962 according to the HBS WRDS/CRSP guide:
+  https://www2.library.hbs.edu/services/help-center/finding-a-time-series-of-stock-prices-in-crsp
+- Polygon documents split-adjusted historical market data and explicitly says
+  it does not currently provide dividend-adjusted data:
+  https://polygon.io/knowledge-base/article/is-polygons-stock-data-adjusted-for-splits-or-dividends
 
 ## Table Coverage
 

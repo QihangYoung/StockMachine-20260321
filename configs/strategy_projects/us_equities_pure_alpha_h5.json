@@ -8,6 +8,7 @@
   "notes": "Research-only. Intended for high-liquidity U.S. stock cross-sectional selection with dollar neutrality, beta matching, and lockbox test discipline.",
   "entrypoints": {
     "research_protocol_doc": "docs/us-equities-pure-alpha-protocol.md",
+    "phase0_app": "stockmachine.apps.run_pure_alpha_phase0",
     "robustness_app": "stockmachine.apps.run_robustness_suite"
   }
 }

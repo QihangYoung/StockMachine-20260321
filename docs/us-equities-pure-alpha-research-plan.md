@@ -227,6 +227,12 @@ Phase 0 status as of `2026-04-17`:
   current top1000 bootstrap symbols;
 - provisional validation-window membership artifacts were generated using
   lagged 20-session median dollar volume;
+- a repeatable Phase 0 utility exists at
+  `stockmachine.apps.run_pure_alpha_phase0`;
+- asset-class QA found `0` obvious ETF/fund-like names in the selected top1000,
+  but `96` symbols require review, mostly foreign / ADR-like names;
+- vendor bake-off artifacts exist with Norgate, Sharadar, CRSP, and Polygon as
+  the first evaluation order;
 - the top1000 data backfill is suitable for Phase 1 data engineering and
   validation-only mechanics;
 - it is not a point-in-time historical universe and must be converted into
@@ -265,6 +271,19 @@ Provisional membership status:
 - top1000 is only a current-scope top1000 artifact, not a full-market
   historical top1000;
 - top1500/top2000/top3000 remain blocked until broader data is backfilled.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase0 all
+```
+
+This command regenerates:
+
+- provisional validation-window lagged-liquidity membership;
+- current top1000 asset-class QA;
+- vendor bake-off matrix and acceptance checks.
 
 Required data:
 
