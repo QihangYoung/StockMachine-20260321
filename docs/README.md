@@ -39,6 +39,7 @@
 - `us-equities-pure-alpha-protocol.md`: first research contract for the beta-matched long-short U.S. equities pure-alpha line
 - `us-equities-pure-alpha-characteristics-memo-20260417.md`: plain-language memo on beta-matched long-short pure-alpha characteristics and realistic industry performance levels
 - `us-equities-pure-alpha-research-plan.md`: staged research plan for the small-capacity beta-matched U.S. equities pure-alpha product
+- `us-equities-pure-alpha-phase0-data-audit-20260417.md`: Phase 0 pre-universe data audit, supplemental Alpaca top1000 backfill, and 2013-2015 vendor gap-fill plan
 - `multi-asset-bucket-covariance-spec.md`: frozen first-pass bucket definitions, ETF representatives, and covariance-estimation defaults for `C 2.0`
 - `strategy-metric-frequency-convention.md`: frozen rule for which Sharpe frequency is primary for `h5`, `h1`, and multi-asset strategies
 - `post-hoc-hypothesis-discipline-memo.md`: rule for using backtest results to generate the next experiment without turning the same sample into final strategy truth

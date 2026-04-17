@@ -62,11 +62,17 @@ that is meaningfully different from long-only equity exposure.
 
 The timeline follows the Beta-thread validation architecture:
 
-- validation / research window: `2013-08-01` through `2019-12-31`
+- validation / research window: `2013-08-05` through `2019-12-31`
 - final test lockbox: `2020-01-02` through `2026-04-08`
 
-If stock-level universe coverage starts after `2013-08-01`, the usable research
+If stock-level universe coverage starts after `2013-08-05`, the usable research
 start may move later. The test start must not move earlier.
+
+Phase 0 supplemental top1000 data currently starts on `2016-01-04`. If Phase 1
+uses that broad top1000 backfill, the broad-stock validation start must move to
+`2016-01-04` plus the required beta and feature warm-up. Keeping the Beta-thread
+`2013-08-05` validation start requires an alternate vendor to fill broad stock
+bars for `2013-08-05` through `2015-12-31`.
 
 The final test window must not be used for:
 
@@ -147,10 +153,15 @@ Candidate universe families to evaluate in Phase 1:
 - `ADV >= 50M`
 - `ADV >= 30M`
 - `ADV >= 20M`
+- `ADV >= 10M` as an expansion candidate only
 - top `500` by trailing dollar volume
 - top `1000` by trailing dollar volume
 - top `1500` by trailing dollar volume
+- top `2000` by trailing dollar volume
+- top `3000` by trailing dollar volume
 - stricter short-side variant for each candidate when borrow data is missing
+- asymmetric variants where the long book can draw from a broader universe than
+  the short book
 
 Fields needed for candidate construction:
 
@@ -185,6 +196,7 @@ Deliverables:
 - proposed Phase 1 candidate universe set
 - decision on whether Phase 1 should use explicit membership, derived trailing
   liquidity membership, or both
+- supplemental top1000 data backfill manifest and coverage rollup
 
 Exit criteria:
 
@@ -195,6 +207,65 @@ Exit criteria:
 - benchmark return path appears available for beta feasibility checks
 - shortability and borrow gaps are documented
 - test lockbox remains untouched
+
+Phase 0 status as of `2026-04-17`:
+
+- a current-date liquidity-ranked top1000 bootstrap manifest exists;
+- top1000 raw daily bars and adjustment factors were backfilled from Alpaca SIP
+  for `2016-01-04` through `2026-04-16`;
+- the top1000 data backfill is suitable for Phase 1 data engineering and
+  validation-only mechanics;
+- it is not a point-in-time historical universe and must be converted into
+  lagged, session-scoped membership before alpha research.
+- full Beta-window alignment remains blocked until broad U.S. stock data is
+  filled for `2013-08-05` through `2015-12-31`.
+
+## Phase 0B: Broad Data Gap Fill
+
+Goal:
+
+Fill the broad U.S. stock data gap from `2013-08-05` through `2015-12-31` so
+the pure-alpha line can align with the Beta-thread validation window instead of
+starting broad-stock research in 2016.
+
+Required data:
+
+- daily OHLCV for active and delisted U.S. common stocks
+- split and dividend adjustment path, or enough corporate actions to rebuild it
+- historical listing status and ticker-change handling
+- reliable common-stock / ETF / ETN / unit / warrant filtering
+- enough breadth to form top `1000`, top `1500`, top `2000`, and top `3000`
+  candidates from lagged trailing dollar volume
+
+Preferred vendor order:
+
+| Vendor | Use Case | Research Note |
+|---|---|---|
+| Norgate Data | preferred independent-research source | Strong fit for survivorship-bias-free U.S. equities, delisted stocks, and historical membership/context. |
+| Sharadar / Nasdaq Data Link | preferred API-style source | Strong fit for active plus delisted equities and repeatable ingestion. |
+| CRSP / WRDS | gold-standard source if available | Best research quality, but usually requires institutional access. |
+| Polygon.io | API fallback | Good coverage and corporate actions, but dividend adjustment must be rebuilt and audited. |
+| QuantQuote / HistoricalData.net / EODHD | low-cost backup | Only acceptable after strict split, dividend, delisting, and ETF-filter validation. |
+| Yahoo / Stooq | sanity-check only | Not acceptable as the primary research source for final claims. |
+
+Vendor bake-off acceptance checks:
+
+- can load daily bars for `2013-08-05`, `2014-01-02`, and `2015-12-31`;
+- can generate lagged topN membership without using future liquidity;
+- includes delisted names or otherwise documents survivorship bias clearly;
+- adjustment factors match known split/dividend events on sampled names;
+- ETF, ETN, preferred, warrant, unit, and SPAC-like instruments can be filtered;
+- overlap and return samples reconcile against the existing Alpaca 2016+ data;
+- ingestion cost and update mechanics are acceptable for repeated research runs.
+
+Exit criteria:
+
+- one primary vendor is selected for the 2013-2015 gap;
+- broad-stock `daily_bar` and `adj_factor` coverage is available from
+  `2013-08-05`;
+- the first Phase 1 universe construction run can use the full validation
+  window without pretending the current Alpaca top1000 manifest is historical
+  membership.
 
 ## Phase 1: Point-In-Time High-Liquidity Universe
 
@@ -226,7 +297,12 @@ Candidate variants:
 - `ADV >= 50M`
 - `ADV >= 30M`
 - `ADV >= 20M`
-- top `500`, top `1000`, and top `1500` by liquidity
+- `ADV >= 10M` as an expansion candidate only
+- top `500`, top `1000`, top `1500`, top `2000`, and top `3000` by liquidity
+- core universe variants: top `1000` / top `1500`
+- expansion universe variants: top `2000` / top `3000`
+- asymmetric variants: broader long-side universe with a more conservative
+  short-side universe
 
 Important rule:
 
@@ -237,6 +313,41 @@ frozen, the universe definition must also be frozen before any test run.
 Do not pick the universe because it maximizes backtest return. Pick the Phase 1
 default because it is point-in-time safe, liquid enough, broad enough for
 balanced long-short construction, and appropriate for `<= 500,000 USD`.
+
+For this product size, top `2000` and top `3000` are legitimate research
+candidates. A `500,000 USD` strategy may be able to trade smaller high-liquidity
+names that are unattractive to large institutions. The trade-off is that wider
+universes require stricter execution and short-side controls.
+
+Phase 1 should therefore treat the universe as liquidity buckets:
+
+| Bucket | Intended Use |
+|---|---|
+| top `500` | safest liquidity and borrow baseline, but likely most crowded |
+| top `1000` | conservative core candidate |
+| top `1500` | wider core candidate with still-manageable liquidity |
+| top `2000` | small-capacity expansion candidate |
+| top `3000` | highest breadth / highest data-quality and shortability burden |
+
+Expansion buckets must not become the default unless they pass additional
+checks:
+
+- higher cost stress
+- borrow or shortability stress
+- jump and gap-risk diagnostics
+- stale-price and halt-risk diagnostics
+- stricter short-side liquidity filters
+- sector and size exposure attribution
+
+The long and short universes do not have to be identical. One reasonable small-
+capacity design is:
+
+- long side: allow top `2000` or top `3000` if liquidity and data quality pass
+- short side: restrict to top `1000` or top `1500`, or easy-to-borrow names when
+  borrow data exists
+
+The final portfolio must still satisfy beta matching, exposure controls, and
+cost realism.
 
 Deliverables:
 
@@ -254,6 +365,13 @@ Exit criteria:
 - enough names per day for balanced long-short construction
 - short-side eligibility is documented
 - a validation-default universe is chosen without using test-window performance
+
+Immediate implementation note:
+
+The Phase 0 top1000 backfill should be treated as a raw data lake for Phase 1.
+The next module should derive daily topN and ADV-threshold membership from
+lagged trailing dollar volume, rather than reading `top1000_manifest.csv` as a
+fixed historical universe.
 
 ## Phase 2: Beta Estimation Layer
 
