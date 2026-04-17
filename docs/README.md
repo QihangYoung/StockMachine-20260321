@@ -35,7 +35,10 @@
 - `fmf-regime-detector-vnext-spec-20260409.md`: design spec for a multi-signal, probability-style `FMF` regime detector with a still-thin action layer
 - `fmf-regime-vnext-review-20260409.md`: first validation-only review of the multi-signal score-based detector, showing that the architecture is viable but still does not beat the static lead
 - `dynamic-sleeve-growth-engine-observation-20260416.md`: validation-only observation that dynamic sleeve behavior depends strongly on the growth engine, including `SPY`, `VGT`, and `SOXX` comparisons
+- `universe-adjustment-options-memo-20260416.md`: validation-only memo explaining why the rebuilt `FMF` universe looks weak, plausible replacement universes, and why the universe-change branch is temporarily shelved
 - `us-equities-pure-alpha-protocol.md`: first research contract for the beta-matched long-short U.S. equities pure-alpha line
+- `us-equities-pure-alpha-characteristics-memo-20260417.md`: plain-language memo on beta-matched long-short pure-alpha characteristics and realistic industry performance levels
+- `us-equities-pure-alpha-research-plan.md`: staged research plan for the small-capacity beta-matched U.S. equities pure-alpha product
 - `multi-asset-bucket-covariance-spec.md`: frozen first-pass bucket definitions, ETF representatives, and covariance-estimation defaults for `C 2.0`
 - `strategy-metric-frequency-convention.md`: frozen rule for which Sharpe frequency is primary for `h5`, `h1`, and multi-asset strategies
 - `post-hoc-hypothesis-discipline-memo.md`: rule for using backtest results to generate the next experiment without turning the same sample into final strategy truth
