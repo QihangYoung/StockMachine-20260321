@@ -37,6 +37,14 @@ Supplemental top1000 backfill artifacts:
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_data_backfill_20260417/top1000_backfill_coverage_by_symbol.csv`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_data_backfill_20260417/top1000_backfill_coverage_rollup.json`
 
+Provisional Yahoo gap-fill artifacts:
+
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_gapfill_summary.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_gapfill_coverage_rollup.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_gapfill_symbol_coverage.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_gapfill_daily_symbol_counts.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/top1000_gapfill_yahoo_20130805_20151231_20260417/yahoo_vs_alpaca_reconciliation_20160104_top120_summary.json`
+
 ## Executive Decision
 
 At the start of this audit, current data was sufficient for a small mechanics
@@ -74,6 +82,11 @@ probing, this supplemental top1000 data starts on `2016-01-04`. Any broad
 top1000 validation work based on this backfill must start no earlier than
 `2016-01-04` plus the required beta and feature warm-up, unless an alternate
 vendor fills `2013-08-05` through `2015-12-31`.
+
+A provisional Yahoo chart gap fill now covers `2013-08-05` through
+`2015-12-31` for the current top1000 bootstrap symbols. This closes the
+calendar gap for data-engineering purposes, but it is not yet a final
+survivorship-bias-free institutional data source.
 
 ## Supplemental Top1000 Backfill
 
@@ -118,6 +131,56 @@ Interpretation:
   be handled by warm-up and eligibility filters;
 - shortability is still only current Alpaca metadata, not a historical borrow
   series.
+
+## Provisional Yahoo Gap Fill
+
+Purpose:
+
+Fill the Beta-aligned validation gap from `2013-08-05` through `2015-12-31`
+while the primary research-grade vendor decision remains open.
+
+Method:
+
+- source: Yahoo chart API
+- scope: current liquidity-ranked top1000 bootstrap symbols
+- window: `2013-08-05` through `2015-12-31`
+- rows written to `daily_bar`: `470,021`
+- rows written to `adj_factor`: `470,021`
+- symbols with any rows: `801`
+- symbols with full `608`-session coverage: `747`
+- minimum symbols available per session: `747`
+- median symbols available per session: `772`
+- maximum symbols available per session: `801`
+
+Important price-scale handling:
+
+Yahoo quote OHLCV is split-adjusted to the current share scale. To keep the
+2013-2015 data compatible with the existing Alpaca `raw` files, the gap-fill
+job reconstructed as-traded raw prices and volumes using future split events.
+
+Reconciliation check:
+
+- comparison date: `2016-01-04`
+- sample: first `120` current top1000 symbols
+- compared successfully: `99`
+- median absolute raw close relative difference versus Alpaca: about
+  `0.000000018`
+- max absolute raw close relative difference versus Alpaca: about
+  `0.000000056`
+- median absolute adjusted-factor relative difference versus Alpaca: about
+  `0.000234`
+- adjusted-factor outliers above `5%`: `4` symbols in the sample
+
+Interpretation:
+
+- raw OHLCV scale conversion is validated against Alpaca and appears tight;
+- Yahoo adjusted factors are provisional and can diverge on complex corporate
+  actions;
+- the current-top1000 symbol list still has survivorship/current-symbol bias;
+- this gap fill is acceptable for Phase 0 / Phase 1 plumbing, coverage checks,
+  and beta-mechanics experiments;
+- it is not yet acceptable as the final source for production-grade pure-alpha
+  claims.
 
 ## Table Coverage
 
@@ -219,17 +282,17 @@ research.
 The starting local data could not construct top500/top1000/top1500 U.S. stock
 universes because only 66 stock symbols had local daily bars.
 
-The supplemental Alpaca backfill improves this from 2016 onward, but it still
-does not fill the Beta-aligned validation start. The broad-stock data gap is now
-specifically `2013-08-05` through `2015-12-31`.
+The supplemental Alpaca backfill improves this from 2016 onward. A provisional
+Yahoo gap fill now covers `2013-08-05` through `2015-12-31`, but a
+research-grade vendor source is still preferred before final claims.
 
 Impact:
 
-- no full-window broad high-liquidity universe selection yet
-- no full-window universe breadth comparison yet
-- no full-window evaluation of mid-large cap alpha outside the existing basket
-- no claim of complete Beta-window alignment until an alternate vendor fills the
-  2013-2015 gap
+- no final full-window broad high-liquidity universe selection yet
+- no final full-window universe breadth comparison yet
+- no production-grade claim until survivorship-bias-free data and corporate
+  action quality are resolved
+- provisional Beta-window plumbing is now possible with Yahoo gap-fill data
 
 ### 2. Shortability data is missing
 
@@ -343,8 +406,10 @@ default universe.
 ### Track C: 2013-2015 Vendor Gap Fill
 
 The top1000 Alpaca backfill should not be stretched beyond its observed
-coverage. To fully align with the Beta thread, add a vendor bake-off for broad
-U.S. stock data from `2013-08-05` through `2015-12-31`.
+coverage. A provisional Yahoo gap fill now covers broad current-top1000 symbols
+from `2013-08-05` through `2015-12-31`, but the vendor bake-off should remain
+open because Yahoo does not solve survivorship-bias-free membership and has
+adjustment-factor outliers on complex corporate actions.
 
 Recommended candidate order:
 

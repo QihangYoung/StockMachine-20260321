@@ -74,6 +74,11 @@ uses that broad top1000 backfill, the broad-stock validation start must move to
 `2013-08-05` validation start requires an alternate vendor to fill broad stock
 bars for `2013-08-05` through `2015-12-31`.
 
+A provisional Yahoo chart gap fill now covers the missing `2013-08-05` through
+`2015-12-31` segment for current top1000 bootstrap symbols. This allows
+Beta-window plumbing and coverage checks, but it is not yet the final
+survivorship-bias-free source for research claims.
+
 The final test window must not be used for:
 
 - feature discovery
@@ -213,20 +218,34 @@ Phase 0 status as of `2026-04-17`:
 - a current-date liquidity-ranked top1000 bootstrap manifest exists;
 - top1000 raw daily bars and adjustment factors were backfilled from Alpaca SIP
   for `2016-01-04` through `2026-04-16`;
+- provisional Yahoo chart data fills `2013-08-05` through `2015-12-31` for
+  current top1000 bootstrap symbols;
 - the top1000 data backfill is suitable for Phase 1 data engineering and
   validation-only mechanics;
 - it is not a point-in-time historical universe and must be converted into
   lagged, session-scoped membership before alpha research.
-- full Beta-window alignment remains blocked until broad U.S. stock data is
-  filled for `2013-08-05` through `2015-12-31`.
+- full Beta-window plumbing is now possible, but final research claims remain
+  blocked until survivorship-bias-free membership and adjustment quality are
+  solved by a primary vendor or stricter audit.
 
 ## Phase 0B: Broad Data Gap Fill
 
 Goal:
 
-Fill the broad U.S. stock data gap from `2013-08-05` through `2015-12-31` so
-the pure-alpha line can align with the Beta-thread validation window instead of
-starting broad-stock research in 2016.
+Fill and validate the broad U.S. stock data gap from `2013-08-05` through
+`2015-12-31` so the pure-alpha line can align with the Beta-thread validation
+window instead of starting broad-stock research in 2016.
+
+Current status:
+
+- provisional Yahoo chart gap fill exists for current top1000 symbols;
+- `470,021` `daily_bar` rows and `470,021` `adj_factor` rows were written;
+- `801` current top1000 symbols have at least one gap-fill row;
+- `747` current top1000 symbols have full `608`-session coverage;
+- raw OHLCV scale reconciles tightly to Alpaca on a 2016 sample after split
+  reconstruction;
+- adjusted factors remain provisional because complex corporate actions can
+  diverge from Alpaca.
 
 Required data:
 
@@ -266,6 +285,10 @@ Exit criteria:
 - the first Phase 1 universe construction run can use the full validation
   window without pretending the current Alpaca top1000 manifest is historical
   membership.
+
+Until those exit criteria are met, the Yahoo gap fill may be used for plumbing,
+coverage, and beta-mechanics experiments, but not as the final evidence layer
+for production-grade alpha claims.
 
 ## Phase 1: Point-In-Time High-Liquidity Universe
 
