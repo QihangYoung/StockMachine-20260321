@@ -1,0 +1,13 @@
+{
+  "project_id": "us_equities_pure_alpha_h5",
+  "description": "Scaffolded 5-session U.S. equities long-short pure-alpha strategy line with beta-matched long and short books.",
+  "strategy_family": "us_equities_pure_alpha",
+  "strategy_horizon_bucket": "h5",
+  "status": "scaffold",
+  "owner": "research",
+  "notes": "Research-only. Intended for high-liquidity U.S. stock cross-sectional selection with dollar neutrality, beta matching, and lockbox test discipline.",
+  "entrypoints": {
+    "research_protocol_doc": "docs/us-equities-pure-alpha-protocol.md",
+    "robustness_app": "stockmachine.apps.run_robustness_suite"
+  }
+}

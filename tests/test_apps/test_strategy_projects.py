@@ -12,11 +12,13 @@ def test_list_builtin_strategy_projects_includes_h1_and_h5() -> None:
 
     assert "us_equities_h1" in projects
     assert "us_equities_h5" in projects
+    assert "us_equities_pure_alpha_h5" in projects
 
 
 def test_load_strategy_project_returns_expected_metadata() -> None:
     h1 = load_strategy_project("us_equities_h1")
     h5 = load_strategy_project("us_equities_h5")
+    pure_alpha = load_strategy_project("us_equities_pure_alpha_h5")
 
     assert h1.status == "scaffold"
     assert h1.strategy_horizon_bucket == "h1"
@@ -26,6 +28,10 @@ def test_load_strategy_project_returns_expected_metadata() -> None:
     assert h5.strategy_horizon_bucket == "h5"
     assert h5.entrypoints is not None
     assert h5.entrypoints["paper_profiles_dir"] == "configs/strategies/h5"
+    assert pure_alpha.status == "scaffold"
+    assert pure_alpha.strategy_family == "us_equities_pure_alpha"
+    assert pure_alpha.entrypoints is not None
+    assert pure_alpha.entrypoints["research_protocol_doc"] == "docs/us-equities-pure-alpha-protocol.md"
 
 
 def test_resolve_strategy_project_path_supports_builtin_ids() -> None:

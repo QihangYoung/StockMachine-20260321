@@ -11,10 +11,16 @@ from stockmachine.research.robustness_frameworks import (
 def test_resolve_robustness_framework_for_h1_and_h5() -> None:
     h1 = resolve_robustness_framework(strategy_project="us_equities_h1", horizon=1)
     h5 = resolve_robustness_framework(strategy_project="us_equities_h5", horizon=5)
+    pure_alpha = resolve_robustness_framework(
+        strategy_project="us_equities_pure_alpha_h5",
+        horizon=5,
+    )
 
     assert h1.attribution_date_column == "entry_date"
     assert h1.tail_trim_counts == (1, 5, 10)
     assert h5.cost_stress_levels == (10.0, 20.0, 40.0, 60.0)
+    assert pure_alpha.gate_defaults["max_abs_realized_beta"] == 0.05
+    assert pure_alpha.cost_stress_levels == (5.0, 10.0, 20.0, 40.0, 60.0)
 
 
 def test_build_robustness_gate_config_applies_overrides() -> None:
@@ -37,4 +43,9 @@ def test_parameter_stability_is_disabled_by_default_but_overridable() -> None:
 
 
 def test_list_robustness_framework_ids_is_sorted() -> None:
-    assert list_robustness_framework_ids() == ("us_equities_h1", "us_equities_h5")
+    assert list_robustness_framework_ids() == (
+        "multi_asset_fmf_validation",
+        "us_equities_h1",
+        "us_equities_h5",
+        "us_equities_pure_alpha_h5",
+    )

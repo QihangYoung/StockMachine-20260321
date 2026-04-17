@@ -67,6 +67,25 @@ _ROBUSTNESS_FRAMEWORKS: dict[str, RobustnessFrameworkSpec] = {
             "min_positive_year_ratio": 0.5,
         },
     ),
+    "us_equities_pure_alpha_h5": RobustnessFrameworkSpec(
+        framework_id="us_equities_pure_alpha_h5_robustness_v1",
+        strategy_project="us_equities_pure_alpha_h5",
+        default_horizon=5,
+        attribution_date_column="entry_date",
+        tail_return_column="net_return",
+        tail_trim_counts=(1, 5, 10),
+        cost_stress_levels=(5.0, 10.0, 20.0, 40.0, 60.0),
+        parameter_neighborhood_radius=1,
+        run_parameter_stability_by_default=False,
+        gate_defaults={
+            "max_abs_ex_ante_net_beta": 0.05,
+            "max_abs_realized_beta": 0.05,
+            "max_abs_market_correlation": 0.10,
+            "max_top5_day_contribution_share": 0.5,
+            "min_positive_year_ratio": 0.5,
+            "require_long_and_short_leg_contribution": True,
+        },
+    ),
 }
 
 
