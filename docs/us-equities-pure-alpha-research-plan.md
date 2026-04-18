@@ -533,6 +533,42 @@ Exit criteria:
 - ex-ante net beta can be measured every session
 - no future return leakage
 
+Phase 2 beta panel status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase2`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase2_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase2_beta_panel_20260418`;
+- beta panel rows: `923,359`;
+- beta-covered symbols: `763`;
+- supported variants with 100% beta coverage: `top500_clean_core_beta_full`,
+  `top1000_clean_core_beta_full`, `adv50m`, `adv30m`, `adv20m`, and `adv10m`;
+- first beta coverage date: `2014-08-05`;
+- default beta spec: SPY adjusted close-to-close returns, `252` lookback,
+  `126` minimum observations, one-session as-of lag, `10%` shrinkage toward
+  `1.0`, and clip `[0.0, 3.0]`;
+- median beta for the recommended `top500_clean_core_beta_full` variant:
+  `1.0112480372524817`;
+- no alpha signal, portfolio return, model selection, or test-window
+  performance was computed.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase2
+```
+
+Generated artifacts:
+
+- `phase2_beta_panel_validation.csv.gz`;
+- `phase2_variant_beta_coverage_validation.csv`;
+- `phase2_beta_coverage_summary_validation.csv`;
+- `phase2_symbol_beta_stability_validation.csv`;
+- `phase2_beta_panel_memo.md`;
+- `phase2_beta_panel_rollup.json`.
+
 ## Phase 3: Baseline Signals
 
 Goal:
@@ -826,7 +862,8 @@ Near-term deliverables:
 
 - `us_equities_pure_alpha_h5` universe coverage report: started with the
   `2026-04-18` Phase 1 universe builder
-- lagged beta panel and diagnostics
+- lagged beta panel and diagnostics: generated with the `2026-04-18` Phase 2
+  beta builder
 - first beta-matched long-short baseline
 - robustness-compatible artifact manifest
 - validation-only baseline memo

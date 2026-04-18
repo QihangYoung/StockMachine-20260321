@@ -33,6 +33,7 @@ def test_load_strategy_project_returns_expected_metadata() -> None:
     assert pure_alpha.entrypoints is not None
     assert pure_alpha.entrypoints["research_protocol_doc"] == "docs/us-equities-pure-alpha-protocol.md"
     assert pure_alpha.entrypoints["phase1_app"] == "stockmachine.apps.run_pure_alpha_phase1"
+    assert pure_alpha.entrypoints["phase2_app"] == "stockmachine.apps.run_pure_alpha_phase2"
 
 
 def test_resolve_strategy_project_path_supports_builtin_ids() -> None:

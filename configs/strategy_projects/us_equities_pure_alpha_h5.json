@@ -10,6 +10,7 @@
     "research_protocol_doc": "docs/us-equities-pure-alpha-protocol.md",
     "phase0_app": "stockmachine.apps.run_pure_alpha_phase0",
     "phase1_app": "stockmachine.apps.run_pure_alpha_phase1",
+    "phase2_app": "stockmachine.apps.run_pure_alpha_phase2",
     "robustness_app": "stockmachine.apps.run_robustness_suite"
   }
 }
