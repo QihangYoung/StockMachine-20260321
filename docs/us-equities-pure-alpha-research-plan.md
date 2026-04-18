@@ -2070,6 +2070,144 @@ Generated artifacts:
 - `phase4i_target_comparison_memo.md`;
 - `phase4i_residual_target_rollup.json`.
 
+## Phase 4J: Residual-Target-Aware Short Selector
+
+Goal:
+
+Re-score the transparent short-side features against multiple residual targets
+instead of judging them only on beta residual returns.
+
+Status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4j`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4j_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4j_residual_target_short_selector_20260418`;
+- rows loaded: `918,968`;
+- daily selector rows: `36,612`;
+- summary rows: `27`;
+- test lockbox status: `validation_only_no_test_window_performance`.
+
+Key result:
+
+`short_core_plus_overextension` was the cleanest transparent selector across
+all three targets:
+
+| Target | Mean Short Contribution | Hit Rate | Negative Target Share |
+|---|---:|---:|---:|
+| `beta_residual` | `0.000786` | `0.5066` | `0.5166` |
+| `cs_demeaned_beta_residual` | `0.001385` | `0.5015` | `0.5264` |
+| `risk_neutral_beta_residual` | `0.001180` | `0.5155` | `0.5261` |
+
+Interpretation:
+
+The short signal is not random noise, but it is modest. It works better as an
+overextended-winner residual-loser detector than as a pure low-rank reversal
+selector. Phase 5 should not use a short selector that fails the
+cross-section-demeaned or risk-neutral target checks.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4j
+```
+
+## Phase 4K: Asymmetric Long/Short Universe Constructor
+
+Goal:
+
+Test whether the long and short books should draw from different safe candidate
+pools while preserving beta matching.
+
+Status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4k`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4k_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4k_asymmetric_universe_constructor_20260418`;
+- panel rows loaded: `3,707,890`;
+- constructed daily books: `9,283`;
+- skipped rows: `1,565`;
+- summary rows: `8`;
+- test lockbox status: `validation_only_no_test_window_performance`.
+
+Best current proxy:
+
+`top1000_clean_core_beta_full__short_adv30m_clean_core_beta_full`:
+
+- long score: `reversal_5d`;
+- short selector: `short_core_plus_overextension`;
+- mean spread return: `0.001882`;
+- mean CS-demeaned residual spread: `0.001684`;
+- mean short CS-demeaned residual contribution: `0.001244`;
+- mean absolute net beta: effectively `0`;
+- construction rate: `86.43%`.
+
+Interpretation:
+
+The result supports asymmetric construction and asymmetric signals. The long
+side should use the cleaner `reversal_5d` signal inside the stronger top1000
+pool, while the short side should use the overextension/residual-momentum
+selector in a broader but still liquid ADV proxy. `adv30m` currently has the
+best CS-demeaned residual spread, with `adv50m` close behind, so the lesson is
+not simply "wider is better"; it is "give the short book enough breadth without
+letting liquidity/noise dominate."
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4k
+```
+
+## Phase 4L: Top2000 Feasibility Audit
+
+Goal:
+
+Decide whether a top2000 short-universe experiment is data-safe before any
+performance claim.
+
+Status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4l`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4l_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4l_top2000_feasibility_audit_20260418`;
+- audited expansion variants: `top1500`, `top2000`, `top3000`;
+- top2000 status: `blocked`;
+- test lockbox status: `validation_only_no_test_window_performance`.
+
+Decision:
+
+Do not run top2000 alpha or portfolio performance yet. `top1500`, `top2000`,
+and `top3000` are absent from the Phase 3 signal panel, and Phase 1 marks them
+as blocked by the current top1000 bootstrap scope.
+
+Required unblockers:
+
+- timestamp-safe full-market daily membership beyond the current top1000
+  bootstrap symbols;
+- full-market adjusted price/volume history aligned to the validation window;
+- point-in-time asset-class filter and better historical shortability/borrow
+  data;
+- sector/industry/style fields for stronger residual neutralization.
+
+Near-term proxy:
+
+Use `top1000` long plus `adv30m` short as the safe validation-only expansion
+sandbox until the true top2000 data layer exists.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4l
+```
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -2289,11 +2427,22 @@ Near-term deliverables:
   diagnostic builder, showing that high momentum / overextension features are
   cleaner short-side candidates than standalone beta after median, trimmed
   mean, and right-tail checks
-- universe-prior strength study: next diagnostic Phase 4H, designed to test
-  whether `top1000` is structurally too strong for short selection
-- multi-factor residual target study: next diagnostic Phase 4I, designed to
-  test whether beta-only residuals leave too much sector / style / liquidity
-  drift in the target
+- universe-prior strength study: generated with the `2026-04-18` Phase 4H
+  diagnostic builder, showing that `top1000` is not automatically the best
+  short-side universe
+- multi-factor residual target study: generated with the `2026-04-18` Phase 4I
+  diagnostic builder, showing that beta-only residuals should be checked
+  against cross-section-demeaned and risk-neutral targets
+- residual-target-aware short selector: generated with the `2026-04-18` Phase
+  4J diagnostic builder, identifying `short_core_plus_overextension` as the
+  best transparent short selector across the three residual targets
+- asymmetric long/short universe constructor: generated with the `2026-04-18`
+  Phase 4K diagnostic builder, with `top1000` long plus `adv30m` short as the
+  cleanest current beta-matched proxy when long selection uses `reversal_5d`
+  and short selection uses `short_core_plus_overextension`
+- top2000 feasibility audit: generated with the `2026-04-18` Phase 4L audit
+  builder, keeping `top1500` / `top2000` / `top3000` blocked until a
+  timestamp-safe broader data layer exists
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
