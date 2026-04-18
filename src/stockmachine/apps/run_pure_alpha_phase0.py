@@ -21,6 +21,24 @@ DEFAULT_ASSET_AUDIT = (
 DEFAULT_PIT_ROOT = RESEARCH_ROOT / "phase0_provisional_pit_universe_feasibility_20260417"
 DEFAULT_ASSET_QA_ROOT = RESEARCH_ROOT / "phase0_asset_class_qa_20260417"
 DEFAULT_VENDOR_ROOT = RESEARCH_ROOT / "phase0_vendor_bakeoff_20260417"
+DEFAULT_CLOSURE_ROOT = RESEARCH_ROOT / "phase0_closure_20260418"
+DEFAULT_TOP1000_COVERAGE_ROLLUP = (
+    DEFAULT_MANIFEST.parent / "top1000_backfill_coverage_rollup.json"
+)
+DEFAULT_YAHOO_GAPFILL_SUMMARY = (
+    RESEARCH_ROOT
+    / "top1000_gapfill_yahoo_20130805_20151231_20260417"
+    / "yahoo_gapfill_summary.json"
+)
+DEFAULT_YAHOO_RECONCILIATION_SUMMARY = (
+    RESEARCH_ROOT
+    / "top1000_gapfill_yahoo_20130805_20151231_20260417"
+    / "yahoo_vs_alpaca_reconciliation_20160104_top120_summary.json"
+)
+DEFAULT_PIT_ROLLUP = DEFAULT_PIT_ROOT / "phase0_provisional_pit_universe_feasibility_rollup.json"
+DEFAULT_ASSET_QA_ROLLUP = DEFAULT_ASSET_QA_ROOT / "top1000_asset_class_qa_rollup.json"
+DEFAULT_ASSET_QA_BY_SYMBOL = DEFAULT_ASSET_QA_ROOT / "top1000_asset_class_qa_by_symbol.csv"
+DEFAULT_VENDOR_ROLLUP = DEFAULT_VENDOR_ROOT / "vendor_bakeoff_rollup.json"
 DEFAULT_DAILY_GLOBS = (
     "data/silver/daily_bar/phase0_top1000_yahoo_gap_20130805_20151231_chunk*.jsonl",
     "data/silver/daily_bar/phase0_top1000_sip_raw_20160104_20260416_chunk*.jsonl",
@@ -185,20 +203,24 @@ def run_asset_class_qa(
         symbol = str(row["symbol"])
         name = _row_str(row, "name_manifest") or _row_str(row, "name_asset")
         classification, flags = classify_asset(symbol=symbol, name=name, row=row)
+        tradable = _row_bool_any(row, "tradable")
+        marginable = _row_bool_any(row, "marginable")
+        shortable = _row_bool_any(row, "shortable")
+        easy_to_borrow = _row_bool_any(row, "easy_to_borrow")
         rows.append(
             {
                 "symbol": symbol,
                 "name": name,
-                "exchange": _row_str(row, "exchange_asset") or _row_str(row, "exchange_manifest"),
+                "exchange": _row_str_any(row, "exchange"),
                 "liquidity_rank": row.get("liquidity_rank"),
                 "classification": classification,
                 "flags": "|".join(flags),
                 "review_required": classification != "common_stock_candidate" or bool(flags),
-                "tradable": row.get("tradable"),
-                "marginable": row.get("marginable"),
-                "shortable": row.get("shortable"),
-                "easy_to_borrow": row.get("easy_to_borrow"),
-                "asset_filter_reason": row.get("phase0_filter_reason"),
+                "tradable": tradable,
+                "marginable": marginable,
+                "shortable": shortable,
+                "easy_to_borrow": easy_to_borrow,
+                "asset_filter_reason": _row_value_any(row, "phase0_filter_reason"),
             }
         )
     qa = pd.DataFrame(rows)
@@ -258,11 +280,11 @@ def classify_asset(*, symbol: str, name: str, row: pd.Series | None = None) -> t
     if "." in symbol:
         flags.append("class_share_symbol")
     if row is not None:
-        if _row_bool(row, "tradable") is False:
+        if _row_bool_any(row, "tradable") is False:
             flags.append("not_tradable_current_metadata")
-        if _row_bool(row, "shortable") is False:
+        if _row_bool_any(row, "shortable") is False:
             flags.append("not_shortable_current_metadata")
-        if _row_bool(row, "easy_to_borrow") is False:
+        if _row_bool_any(row, "easy_to_borrow") is False:
             flags.append("not_easy_to_borrow_current_metadata")
 
     if "etf_or_fund_name_pattern" in flags or "non_common_security_name_pattern" in flags:
@@ -309,6 +331,67 @@ def write_vendor_bakeoff_artifacts(
     (output_dir / "vendor_bakeoff_rollup.json").write_text(
         json.dumps(rollup, indent=2, ensure_ascii=True), encoding="utf-8"
     )
+    return rollup
+
+
+def write_phase0_closure_artifacts(
+    *,
+    output_root: str | Path = DEFAULT_CLOSURE_ROOT,
+    top1000_coverage_rollup_path: str | Path = DEFAULT_TOP1000_COVERAGE_ROLLUP,
+    yahoo_gapfill_summary_path: str | Path = DEFAULT_YAHOO_GAPFILL_SUMMARY,
+    yahoo_reconciliation_summary_path: str | Path = DEFAULT_YAHOO_RECONCILIATION_SUMMARY,
+    pit_rollup_path: str | Path = DEFAULT_PIT_ROLLUP,
+    asset_qa_rollup_path: str | Path = DEFAULT_ASSET_QA_ROLLUP,
+    asset_qa_by_symbol_path: str | Path = DEFAULT_ASSET_QA_BY_SYMBOL,
+    vendor_rollup_path: str | Path = DEFAULT_VENDOR_ROLLUP,
+) -> dict[str, Any]:
+    """Write the local Phase 0 closure packet and Phase 1 entry gates."""
+
+    output_dir = Path(output_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    inputs = {
+        "top1000_coverage": _read_json_if_exists(top1000_coverage_rollup_path),
+        "yahoo_gapfill": _read_json_if_exists(yahoo_gapfill_summary_path),
+        "yahoo_reconciliation": _read_json_if_exists(yahoo_reconciliation_summary_path),
+        "pit_universe": _read_json_if_exists(pit_rollup_path),
+        "asset_qa": _read_json_if_exists(asset_qa_rollup_path),
+        "vendor_bakeoff": _read_json_if_exists(vendor_rollup_path),
+    }
+    asset_policy_counts = _asset_policy_counts(asset_qa_by_symbol_path)
+    decisions = _phase0_local_decisions(asset_policy_counts)
+    blockers = _phase0_phase1_blockers()
+
+    decisions_path = output_dir / "phase0_local_policy_decisions.csv"
+    blockers_path = output_dir / "phase0_phase1_blockers.csv"
+    memo_path = output_dir / "phase0_closure_memo.md"
+    rollup_path = output_dir / "phase0_closure_rollup.json"
+    _write_csv(decisions_path, decisions)
+    _write_csv(blockers_path, blockers)
+    memo_path.write_text(
+        _phase0_closure_markdown(inputs, asset_policy_counts, decisions, blockers),
+        encoding="utf-8",
+    )
+
+    missing_inputs = [name for name, payload in inputs.items() if payload.get("missing")]
+    rollup = {
+        "created_at_utc": _utc_now(),
+        "artifact_dir": output_dir.as_posix(),
+        "phase0_status": "local_phase0_complete_for_phase1_plumbing",
+        "phase1_entry_recommendation": (
+            "Start Phase 1 mechanics with validation-only current-top1000-scope top500/top1000 "
+            "experiments, while treating broader universes and final performance claims as gated "
+            "on a research-grade vendor."
+        ),
+        "test_lockbox": "No test-window strategy performance should be used for Phase 0 closure.",
+        "asset_policy_counts": asset_policy_counts,
+        "missing_inputs": missing_inputs,
+        "local_policy_decisions_artifact": decisions_path.as_posix(),
+        "phase1_blockers_artifact": blockers_path.as_posix(),
+        "memo_artifact": memo_path.as_posix(),
+        "inputs": {name: payload.get("path") for name, payload in inputs.items()},
+    }
+    rollup_path.write_text(json.dumps(rollup, indent=2, ensure_ascii=True), encoding="utf-8")
     return rollup
 
 
@@ -632,6 +715,253 @@ def _vendor_bakeoff_markdown(vendors: list[dict[str, str]], checks: list[dict[st
     return "\n".join(lines) + "\n"
 
 
+def _phase0_local_decisions(asset_policy_counts: dict[str, Any]) -> list[dict[str, str]]:
+    core_symbols = asset_policy_counts.get("default_core_symbols")
+    review_symbols = asset_policy_counts.get("review_required_symbols")
+    if core_symbols is None or review_symbols is None:
+        asset_policy = (
+            "Default core excludes review-required names until a security-master decision is made."
+        )
+    else:
+        asset_policy = (
+            f"Default core excludes {review_symbols} review-required names, leaving "
+            f"{core_symbols} symbols for the cleanest bootstrap core."
+        )
+    return [
+        {
+            "decision_id": "window_alignment",
+            "status": "closed_locally",
+            "policy": "Use Beta-line validation window 2013-08-05 through 2019-12-31.",
+            "phase1_effect": "Universe and signal experiments must stay validation-only until final lockbox review.",
+            "phase1_gate": "No test-window strategy performance in Phase 0 or early Phase 1.",
+        },
+        {
+            "decision_id": "bootstrap_universe",
+            "status": "closed_for_plumbing",
+            "policy": "Use current top1000 only as a data bootstrap, not as historical membership truth.",
+            "phase1_effect": "Daily membership must be recomputed from lagged price/volume on each date.",
+            "phase1_gate": "Final claims require survivorship-bias-free active plus delisted coverage.",
+        },
+        {
+            "decision_id": "asset_class_policy",
+            "status": "closed_for_default_core",
+            "policy": asset_policy,
+            "phase1_effect": "Run the first mechanics on the clean core, then test ADR/REIT/class-share extensions separately.",
+            "phase1_gate": "Freeze inclusion rules before alpha model selection.",
+        },
+        {
+            "decision_id": "short_side_policy",
+            "status": "closed_as_proxy_only",
+            "policy": "Current shortable/easy-to-borrow metadata is a sanity check, not a historical borrow dataset.",
+            "phase1_effect": "Short book needs liquidity, borrow stress, and no hard-to-borrow alpha assumptions.",
+            "phase1_gate": "Historical borrow/locate data or conservative proxy stress is required before production sizing.",
+        },
+        {
+            "decision_id": "adjustment_policy",
+            "status": "closed_as_provisional",
+            "policy": "Yahoo 2013-2015 gap-fill is acceptable for plumbing but not final adjustment truth.",
+            "phase1_effect": "Outlier corporate-action names must be excluded or reconciled in sensitivity runs.",
+            "phase1_gate": "A primary vendor must pass split/dividend/delisting reconciliation.",
+        },
+        {
+            "decision_id": "topn_policy",
+            "status": "closed_for_top500_current_scope",
+            "policy": "Top500 mechanics are supported inside current top1000 scope; top1500+ is blocked by data breadth.",
+            "phase1_effect": "Start with top500 and current-scope top1000 diagnostics before expanding.",
+            "phase1_gate": "Top1500/top2000/top3000 need broader historical bars and PIT membership construction.",
+        },
+        {
+            "decision_id": "robustness_framework",
+            "status": "closed_to_reuse_beta_framework",
+            "policy": "Reuse the Beta-line robustness frame for windows, costs, turnover, parameter, and sub-universe stress.",
+            "phase1_effect": "Pure alpha claims must survive robustness checks, not just one selected validation run.",
+            "phase1_gate": "Promote only signals that pass predeclared robustness gates.",
+        },
+    ]
+
+
+def _phase0_phase1_blockers() -> list[dict[str, str]]:
+    return [
+        {
+            "blocker_id": "primary_vendor_selection",
+            "priority": "P0",
+            "blocker": "No research-grade primary vendor has been selected yet.",
+            "why_it_matters": "Final claims need active plus delisted coverage and audited corporate actions.",
+            "exit_criterion": "One vendor passes the Phase 0 vendor bake-off acceptance checks.",
+        },
+        {
+            "blocker_id": "survivorship_bias_free_universe",
+            "priority": "P0",
+            "blocker": "Current top1000 membership is a present-day bootstrap list.",
+            "why_it_matters": "Using it as history would overweight survivors and distort alpha estimates.",
+            "exit_criterion": "Build lagged PIT membership from a broad active plus delisted security universe.",
+        },
+        {
+            "blocker_id": "broad_top1500_plus_data",
+            "priority": "P1",
+            "blocker": "Top1500/top2000/top3000 cannot be tested from a top1000-only backfill.",
+            "why_it_matters": "Capacity and liquidity trade-offs require broader universe comparisons.",
+            "exit_criterion": "Acquire or backfill broader historical bars and rerun PIT feasibility.",
+        },
+        {
+            "blocker_id": "historical_shortability_borrow",
+            "priority": "P1",
+            "blocker": "Historical borrow cost and locate availability are not available locally.",
+            "why_it_matters": "The short book can look great before borrow fees and hard-to-borrow constraints.",
+            "exit_criterion": "Use vendor borrow data or a documented conservative proxy stress suite.",
+        },
+        {
+            "blocker_id": "corporate_action_reconciliation",
+            "priority": "P1",
+            "blocker": "Yahoo gap-fill adjustment factors have known outliers versus Alpaca overlap.",
+            "why_it_matters": "Bad adjustments can manufacture false reversal/momentum signals.",
+            "exit_criterion": "Reconcile split/dividend/delist events or quarantine outlier symbols.",
+        },
+        {
+            "blocker_id": "pit_industry_and_security_master",
+            "priority": "P2",
+            "blocker": "PIT industry, ADR, REIT, and class-share metadata are not fully frozen.",
+            "why_it_matters": "Beta-matched long/short portfolios can still carry hidden sector or issuer bets.",
+            "exit_criterion": "Freeze security-master rules and sector/industry metadata before model comparison.",
+        },
+    ]
+
+
+def _phase0_closure_markdown(
+    inputs: dict[str, dict[str, Any]],
+    asset_policy_counts: dict[str, Any],
+    decisions: list[dict[str, str]],
+    blockers: list[dict[str, str]],
+) -> str:
+    top1000 = inputs["top1000_coverage"]
+    yahoo = inputs["yahoo_gapfill"]
+    recon = inputs["yahoo_reconciliation"]
+    pit = inputs["pit_universe"]
+    asset = inputs["asset_qa"]
+    vendor = inputs["vendor_bakeoff"]
+    lines = [
+        "# Pure Alpha Phase 0 Closure Memo",
+        "",
+        f"Generated: {_utc_now()}",
+        "",
+        "## Closure State",
+        "",
+        "Phase 0 is locally complete for Phase 1 data engineering and strategy plumbing. "
+        "It is not a final claim that the research data is production-grade, because the "
+        "primary survivorship-bias-free vendor is still an external gate.",
+        "",
+        "No test-window strategy performance was used.",
+        "",
+        "## Evidence Snapshot",
+        "",
+        f"- Top1000 Alpaca SIP rows: {_payload_value(top1000, 'daily_bar_rows_total')}",
+        f"- Top1000 Alpaca coverage: {_payload_value(top1000, 'daily_first_date_min')} through "
+        f"{_payload_value(top1000, 'daily_last_date_max')}",
+        f"- Yahoo gap-fill rows: {_payload_value(yahoo, 'daily_rows_total')}",
+        f"- Yahoo full-coverage symbols: {_payload_value(yahoo, 'symbols_with_full_608_rows')}",
+        f"- Alpaca/Yahoo overlap median raw-close diff: {_payload_value(recon, 'median_abs_close_rel_diff')}",
+        f"- PIT validation rows loaded: {_payload_value(pit, 'validation_rows_loaded')}",
+        f"- PIT median liquidity-eligible members: "
+        f"{_payload_value(pit.get('key_findings', {}), 'median_liquidity_eligible_count')}",
+        f"- Asset QA checked symbols: {_payload_value(asset, 'symbols_checked')}",
+        f"- Asset QA review-required symbols: {_payload_value(asset, 'review_required_symbols')}",
+        f"- Vendor candidates: {_payload_value(vendor, 'candidate_vendors')}",
+        "",
+        "## Default Phase 1 Entry",
+        "",
+        "Start with validation-only top500 and current-top1000-scope mechanics. Use lagged "
+        "daily liquidity membership, beta-matched long/short construction, conservative "
+        "transaction-cost and borrow assumptions, and the Beta-line robustness frame.",
+        "",
+        "Asset policy counts:",
+        "",
+        f"- default core symbols: {asset_policy_counts.get('default_core_symbols', 'n/a')}",
+        f"- review-required symbols: {asset_policy_counts.get('review_required_symbols', 'n/a')}",
+        f"- current easy-to-borrow symbols: {asset_policy_counts.get('easy_to_borrow_symbols', 'n/a')}",
+        "",
+        "## Local Decisions",
+        "",
+        "| Decision | Status | Phase 1 Gate |",
+        "|---|---|---|",
+    ]
+    for decision in decisions:
+        lines.append(
+            f"| {decision['decision_id']} | {decision['status']} | {decision['phase1_gate']} |"
+        )
+    lines.extend(["", "## Remaining Blockers", "", "| Priority | Blocker | Exit Criterion |", "|---|---|---|"])
+    for blocker in blockers:
+        lines.append(
+            f"| {blocker['priority']} | {blocker['blocker']} | {blocker['exit_criterion']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Phase 1 can begin on mechanics now, but final product claims remain gated on "
+            "vendor selection, survivorship-bias-free PIT membership, and short-book cost realism.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _asset_policy_counts(asset_qa_by_symbol_path: str | Path) -> dict[str, Any]:
+    path = Path(asset_qa_by_symbol_path)
+    counts: dict[str, Any] = {"artifact_path": path.as_posix(), "available": False}
+    if not path.exists():
+        return counts
+    qa = pd.read_csv(path)
+    review_required = (
+        qa["review_required"].map(_is_true) if "review_required" in qa else pd.Series(False, index=qa.index)
+    )
+    shortable = qa["shortable"].map(_is_true) if "shortable" in qa else pd.Series(False, index=qa.index)
+    easy_to_borrow = (
+        qa["easy_to_borrow"].map(_is_true)
+        if "easy_to_borrow" in qa
+        else pd.Series(False, index=qa.index)
+    )
+    flags = qa["flags"].fillna("").astype(str) if "flags" in qa else pd.Series("", index=qa.index)
+    classification = (
+        qa["classification"] if "classification" in qa else pd.Series("", index=qa.index)
+    )
+    counts.update(
+        {
+            "available": True,
+            "symbols": int(len(qa)),
+            "default_core_symbols": int((~review_required).sum()),
+            "review_required_symbols": int(review_required.sum()),
+            "shortable_symbols": int(shortable.sum()),
+            "easy_to_borrow_symbols": int(easy_to_borrow.sum()),
+            "foreign_or_adr_review_symbols": int(
+                (classification == "review_foreign_or_adr_like").sum()
+            ),
+            "trust_or_reit_review_symbols": int(
+                (classification == "review_trust_or_reit_like").sum()
+            ),
+            "class_share_review_symbols": int(flags.str.contains("class_share_symbol", regex=False).sum()),
+        }
+    )
+    return counts
+
+
+def _read_json_if_exists(path: str | Path) -> dict[str, Any]:
+    json_path = Path(path)
+    if not json_path.exists():
+        return {"path": json_path.as_posix(), "missing": True}
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        result = dict(payload)
+    else:
+        result = {"value": payload}
+    result["path"] = json_path.as_posix()
+    result["missing"] = False
+    return result
+
+
+def _payload_value(payload: dict[str, Any], key: str) -> Any:
+    if payload.get("missing"):
+        return "missing"
+    return payload.get(key, "n/a")
+
+
 def _write_csv(path: Path, rows: Sequence[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -685,12 +1015,44 @@ def _row_str(row: pd.Series, column: str) -> str:
     return str(value)
 
 
+def _row_str_any(row: pd.Series, column: str) -> str:
+    value = _row_value_any(row, column)
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _row_bool(row: pd.Series, column: str) -> bool | None:
-    value = row.get(column)
+    return _coerce_bool(row.get(column))
+
+
+def _row_bool_any(row: pd.Series, column: str) -> bool | None:
+    return _coerce_bool(_row_value_any(row, column))
+
+
+def _row_value_any(row: pd.Series, column: str) -> Any:
+    for candidate in (f"{column}_asset", f"{column}_manifest", column):
+        value = row.get(candidate)
+        if value is not None and not pd.isna(value):
+            return value
+    return None
+
+
+def _is_true(value: Any) -> bool:
+    return _coerce_bool(value) is True
+
+
+def _coerce_bool(value: Any) -> bool | None:
     if value is None or pd.isna(value):
         return None
     if isinstance(value, bool):
         return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if str(value).strip().lower() in {"true", "t", "yes", "y", "1"}:
+        return True
+    if str(value).strip().lower() in {"false", "f", "no", "n", "0"}:
+        return False
     return str(value).strip().lower() == "true"
 
 
@@ -720,13 +1082,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     vendor = subparsers.add_parser("vendor-bakeoff", help="Write vendor bake-off artifacts.")
     vendor.add_argument("--output-root", default=str(DEFAULT_VENDOR_ROOT))
 
-    all_parser = subparsers.add_parser("all", help="Run PIT universe, asset QA, and vendor bake-off.")
+    closure = subparsers.add_parser("closure", help="Write Phase 0 closure artifacts.")
+    closure.add_argument("--output-root", default=str(DEFAULT_CLOSURE_ROOT))
+    closure.add_argument("--top1000-coverage-rollup-path", default=str(DEFAULT_TOP1000_COVERAGE_ROLLUP))
+    closure.add_argument("--yahoo-gapfill-summary-path", default=str(DEFAULT_YAHOO_GAPFILL_SUMMARY))
+    closure.add_argument(
+        "--yahoo-reconciliation-summary-path",
+        default=str(DEFAULT_YAHOO_RECONCILIATION_SUMMARY),
+    )
+    closure.add_argument("--pit-rollup-path", default=str(DEFAULT_PIT_ROLLUP))
+    closure.add_argument("--asset-qa-rollup-path", default=str(DEFAULT_ASSET_QA_ROLLUP))
+    closure.add_argument("--asset-qa-by-symbol-path", default=str(DEFAULT_ASSET_QA_BY_SYMBOL))
+    closure.add_argument("--vendor-rollup-path", default=str(DEFAULT_VENDOR_ROLLUP))
+
+    all_parser = subparsers.add_parser(
+        "all",
+        help="Run PIT universe, asset QA, vendor bake-off, and closure artifacts.",
+    )
     all_parser.add_argument("--manifest-path", default=str(DEFAULT_MANIFEST))
     all_parser.add_argument("--asset-audit-path", default=str(DEFAULT_ASSET_AUDIT))
     all_parser.add_argument("--daily-glob", action="append", dest="daily_globs")
     all_parser.add_argument("--pit-output-root", default=str(DEFAULT_PIT_ROOT))
     all_parser.add_argument("--asset-qa-output-root", default=str(DEFAULT_ASSET_QA_ROOT))
     all_parser.add_argument("--vendor-output-root", default=str(DEFAULT_VENDOR_ROOT))
+    all_parser.add_argument("--closure-output-root", default=str(DEFAULT_CLOSURE_ROOT))
 
     args = parser.parse_args(argv)
     if args.command == "pit-universe":
@@ -748,20 +1127,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.command == "vendor-bakeoff":
         result = write_vendor_bakeoff_artifacts(output_root=args.output_root)
+    elif args.command == "closure":
+        result = write_phase0_closure_artifacts(
+            output_root=args.output_root,
+            top1000_coverage_rollup_path=args.top1000_coverage_rollup_path,
+            yahoo_gapfill_summary_path=args.yahoo_gapfill_summary_path,
+            yahoo_reconciliation_summary_path=args.yahoo_reconciliation_summary_path,
+            pit_rollup_path=args.pit_rollup_path,
+            asset_qa_rollup_path=args.asset_qa_rollup_path,
+            asset_qa_by_symbol_path=args.asset_qa_by_symbol_path,
+            vendor_rollup_path=args.vendor_rollup_path,
+        )
     else:
+        pit_output_root = Path(args.pit_output_root)
+        asset_qa_output_root = Path(args.asset_qa_output_root)
+        vendor_output_root = Path(args.vendor_output_root)
         result = {
             "pit_universe": build_pit_universe_feasibility(
                 manifest_path=args.manifest_path,
                 daily_globs=tuple(args.daily_globs or DEFAULT_DAILY_GLOBS),
-                output_root=args.pit_output_root,
+                output_root=pit_output_root,
             ),
             "asset_qa": run_asset_class_qa(
                 manifest_path=args.manifest_path,
                 asset_audit_path=args.asset_audit_path,
-                output_root=args.asset_qa_output_root,
+                output_root=asset_qa_output_root,
             ),
-            "vendor_bakeoff": write_vendor_bakeoff_artifacts(output_root=args.vendor_output_root),
+            "vendor_bakeoff": write_vendor_bakeoff_artifacts(output_root=vendor_output_root),
         }
+        result["closure"] = write_phase0_closure_artifacts(
+            output_root=args.closure_output_root,
+            pit_rollup_path=pit_output_root / "phase0_provisional_pit_universe_feasibility_rollup.json",
+            asset_qa_rollup_path=asset_qa_output_root / "top1000_asset_class_qa_rollup.json",
+            asset_qa_by_symbol_path=asset_qa_output_root / "top1000_asset_class_qa_by_symbol.csv",
+            vendor_rollup_path=vendor_output_root / "vendor_bakeoff_rollup.json",
+        )
 
     print(json.dumps({"ok": True, "result": result}, indent=2, ensure_ascii=True))
     return 0

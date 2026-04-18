@@ -9,6 +9,7 @@ from stockmachine.apps.run_pure_alpha_phase0 import (
     build_pit_universe_feasibility,
     classify_asset,
     run_asset_class_qa,
+    write_phase0_closure_artifacts,
     write_vendor_bakeoff_artifacts,
 )
 
@@ -65,6 +66,11 @@ def test_asset_class_qa_flags_review_candidates(tmp_path) -> None:
                 "Berkshire Hathaway Inc.",
             ],
             "liquidity_rank": [1, 2, 3, 4],
+            "exchange": ["NASDAQ", "ARCA", "NYSE", "NYSE"],
+            "tradable": [True, True, True, True],
+            "marginable": [True, True, True, True],
+            "shortable": [True, True, True, True],
+            "easy_to_borrow": [True, True, True, True],
         }
     ).to_csv(manifest_path, index=False)
     asset_path = tmp_path / "assets.csv"
@@ -90,6 +96,8 @@ def test_asset_class_qa_flags_review_candidates(tmp_path) -> None:
 
     assert result["symbols_checked"] == 4
     assert qa.loc[qa["symbol"] == "AAPL", "classification"].iloc[0] == "common_stock_candidate"
+    assert bool(qa.loc[qa["symbol"] == "AAPL", "shortable"].iloc[0]) is True
+    assert bool(qa.loc[qa["symbol"] == "AAPL", "easy_to_borrow"].iloc[0]) is True
     assert qa.loc[qa["symbol"] == "SPY", "classification"].iloc[0] == "blocked_non_common_like"
     assert qa.loc[qa["symbol"] == "TSM", "classification"].iloc[0] == "review_foreign_or_adr_like"
     assert "class_share_symbol" in qa.loc[qa["symbol"] == "BRK.B", "flags"].iloc[0]
@@ -102,6 +110,38 @@ def test_vendor_bakeoff_artifacts_are_written(tmp_path) -> None:
     assert (tmp_path / "vendors" / "vendor_bakeoff_candidates.csv").exists()
     assert (tmp_path / "vendors" / "vendor_bakeoff_acceptance_checks.csv").exists()
     assert (tmp_path / "vendors" / "vendor_bakeoff_plan.md").exists()
+
+
+def test_phase0_closure_artifacts_are_written(tmp_path) -> None:
+    asset_qa_path = tmp_path / "asset_qa.csv"
+    pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB"],
+            "classification": ["common_stock_candidate", "review_foreign_or_adr_like"],
+            "flags": ["", "adr_or_foreign_issuer_name_pattern"],
+            "review_required": [False, True],
+            "shortable": [True, True],
+            "easy_to_borrow": [True, False],
+        }
+    ).to_csv(asset_qa_path, index=False)
+
+    result = write_phase0_closure_artifacts(
+        output_root=tmp_path / "closure",
+        top1000_coverage_rollup_path=tmp_path / "missing_top1000.json",
+        yahoo_gapfill_summary_path=tmp_path / "missing_yahoo.json",
+        yahoo_reconciliation_summary_path=tmp_path / "missing_recon.json",
+        pit_rollup_path=tmp_path / "missing_pit.json",
+        asset_qa_rollup_path=tmp_path / "missing_asset_rollup.json",
+        asset_qa_by_symbol_path=asset_qa_path,
+        vendor_rollup_path=tmp_path / "missing_vendor.json",
+    )
+
+    assert result["phase0_status"] == "local_phase0_complete_for_phase1_plumbing"
+    assert result["asset_policy_counts"]["default_core_symbols"] == 1
+    assert result["asset_policy_counts"]["easy_to_borrow_symbols"] == 1
+    assert "top1000_coverage" in result["missing_inputs"]
+    assert (tmp_path / "closure" / "phase0_closure_memo.md").exists()
+    assert (tmp_path / "closure" / "phase0_phase1_blockers.csv").exists()
 
 
 def test_classify_asset_keeps_plain_common_stock() -> None:

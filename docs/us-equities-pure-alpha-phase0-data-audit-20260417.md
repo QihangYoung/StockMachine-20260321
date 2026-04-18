@@ -55,10 +55,15 @@ Provisional point-in-time universe feasibility artifacts:
 Productized Phase 0 utility artifacts:
 
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_pipeline_run_20260417.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_pipeline_run_20260418.json`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_asset_class_qa_20260417/top1000_asset_class_qa_rollup.json`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_asset_class_qa_20260417/top1000_asset_class_review_queue.csv`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_vendor_bakeoff_20260417/vendor_bakeoff_rollup.json`
 - `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_vendor_bakeoff_20260417/vendor_bakeoff_plan.md`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_closure_20260418/phase0_closure_rollup.json`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_closure_20260418/phase0_closure_memo.md`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_closure_20260418/phase0_local_policy_decisions.csv`
+- `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_closure_20260418/phase0_phase1_blockers.csv`
 
 ## Executive Decision
 
@@ -116,8 +121,14 @@ python -m stockmachine.apps.run_pure_alpha_phase0 all
 ```
 
 This command regenerates the provisional point-in-time universe artifacts,
-asset-class QA, and vendor bake-off files. It does not run alpha signals,
-portfolio returns, or test-window performance.
+asset-class QA, vendor bake-off files, and the Phase 0 closure packet. It does
+not run alpha signals, portfolio returns, or test-window performance.
+
+As of `2026-04-18`, local Phase 0 is closed for Phase 1 plumbing. That means
+we can start validation-only mechanics work, but not final product claims. The
+remaining hard gates are primary vendor selection, survivorship-bias-free PIT
+membership, corporate-action adjustment reconciliation, and short-book borrow
+cost realism.
 
 ## Supplemental Top1000 Backfill
 
@@ -283,6 +294,9 @@ Result:
 | foreign / ADR-like review symbols | `90` |
 | trust / REIT-like review symbols | `3` |
 | class-share review symbols | `3` |
+| default clean-core symbols after review exclusions | `904` |
+| current shortable symbols | `1,000` |
+| current easy-to-borrow symbols | `1,000` |
 
 Interpretation:
 
@@ -294,6 +308,35 @@ Interpretation:
   issuer exposure and data-vendor identifier handling;
 - this QA is metadata/name based and does not replace a research-grade security
   master.
+
+Default Phase 1 policy:
+
+- use the `904`-symbol clean core first;
+- keep the `96` review-required names out of the default core until an
+  ADR/foreign issuer, REIT/trust, and class-share policy is frozen;
+- treat current shortable/easy-to-borrow fields as a sanity check only, not as
+  historical borrow availability.
+
+## Phase 0 Closure Packet
+
+The `2026-04-18` run writes a compact closure packet:
+
+| Artifact | Purpose |
+|---|---|
+| `phase0_closure_rollup.json` | machine-readable Phase 0 status and Phase 1 entry recommendation |
+| `phase0_closure_memo.md` | human-readable evidence snapshot and remaining blockers |
+| `phase0_local_policy_decisions.csv` | local decisions that are closed enough for Phase 1 plumbing |
+| `phase0_phase1_blockers.csv` | remaining blockers before production-grade claims |
+
+Closure status:
+
+- `local_phase0_complete_for_phase1_plumbing`;
+- Phase 1 may begin with validation-only top500 and current-top1000-scope
+  experiments;
+- broader top1500/top2000/top3000 tests remain blocked by data breadth;
+- final claims remain blocked until a research-grade vendor solves active plus
+  delisted coverage, corporate actions, and PIT membership;
+- the test lockbox remains closed.
 
 ## Vendor Bake-Off Artifacts
 
@@ -495,11 +538,13 @@ current data?
 
 Answer:
 
-Partially.
+Locally complete for Phase 1 plumbing, but not complete for final research
+claims.
 
 We can generate feasibility diagnostics for the existing 66-stock high-liquidity
 legacy basket. We can also generate provisional lagged-liquidity membership
-inside the current top1000 bootstrap scope.
+inside the current top1000 bootstrap scope. The repeatable Phase 0 utility now
+also writes asset QA, vendor bake-off, and closure artifacts.
 
 We still cannot generate the intended full broad-market top1500/top2000/top3000
 universe candidates because the current broad backfill contains only top1000

@@ -218,7 +218,7 @@ Exit criteria:
 - shortability and borrow gaps are documented
 - test lockbox remains untouched
 
-Phase 0 status as of `2026-04-17`:
+Phase 0 status as of `2026-04-18`:
 
 - a current-date liquidity-ranked top1000 bootstrap manifest exists;
 - top1000 raw daily bars and adjustment factors were backfilled from Alpaca SIP
@@ -231,12 +231,18 @@ Phase 0 status as of `2026-04-17`:
   `stockmachine.apps.run_pure_alpha_phase0`;
 - asset-class QA found `0` obvious ETF/fund-like names in the selected top1000,
   but `96` symbols require review, mostly foreign / ADR-like names;
+- the default Phase 1 clean core excludes those review-required names, leaving
+  `904` bootstrap symbols;
+- current metadata shows `1,000 / 1,000` selected symbols as shortable and
+  easy-to-borrow, but this remains only a current-date proxy;
 - vendor bake-off artifacts exist with Norgate, Sharadar, CRSP, and Polygon as
   the first evaluation order;
+- a Phase 0 closure packet now exists under
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase0_closure_20260418`;
 - the top1000 data backfill is suitable for Phase 1 data engineering and
   validation-only mechanics;
 - it is not a point-in-time historical universe and must be converted into
-  lagged, session-scoped membership before alpha research.
+  lagged, session-scoped membership before alpha research;
 - full Beta-window plumbing is now possible, but final research claims remain
   blocked until survivorship-bias-free membership and adjustment quality are
   solved by a primary vendor or stricter audit.
@@ -283,7 +289,21 @@ This command regenerates:
 
 - provisional validation-window lagged-liquidity membership;
 - current top1000 asset-class QA;
-- vendor bake-off matrix and acceptance checks.
+- vendor bake-off matrix and acceptance checks;
+- Phase 0 closure memo, local policy decisions, and Phase 1 blocker list.
+
+Phase 1 entry decision:
+
+- start mechanics work with validation-only top500 and current-top1000-scope
+  diagnostics;
+- use the `904`-symbol clean core as the first default universe candidate;
+- keep top1500/top2000/top3000 as blocked expansion candidates until broader
+  historical bars are available;
+- reuse the Beta-line robustness framework before promoting any pure-alpha
+  result;
+- keep final performance claims gated on primary-vendor selection, PIT
+  survivorship-bias-free membership, adjustment reconciliation, and short-book
+  cost realism.
 
 Required data:
 
