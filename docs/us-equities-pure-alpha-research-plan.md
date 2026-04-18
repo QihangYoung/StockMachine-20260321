@@ -782,6 +782,301 @@ Generated artifacts:
 - `phase4_beta_matched_portfolio_memo.md`;
 - `phase4_beta_matched_portfolio_rollup.json`.
 
+## Phase 4B: Short Book Diagnosis
+
+Goal:
+
+Pause before Phase 5 and diagnose why the first beta-matched short book does
+not yet contribute economically.
+
+Phase 4B exists because a positive long-short spread is not enough for this
+product. A pure-alpha strategy should not simply hide a long-side edge inside a
+short overlay. Before building the formal backtest artifact, we must understand
+whether the short-leg failure is caused by the signal, the market regime, beta-
+matching constraints, symmetric long/short design, missing borrow data, or some
+combination of these.
+
+Diagnostic questions:
+
+- does the short side fail before beta matching, using equal-weight raw signal
+  candidates?
+- does the short side only fail after Phase 4 beta-matching weights are applied?
+- is the short problem visible in beta-residual returns, or only in raw returns?
+- do other transparent signals produce better short candidates than
+  `reversal_5d`?
+- are skipped Phase 4 sessions mostly caused by beta feasibility rather than
+  insufficient universe breadth?
+- should the next construction pass use asymmetric long and short signals?
+
+Deliverables:
+
+- equal-weight long/short candidate side diagnostics by signal;
+- Phase 4 weighted long/short side diagnostics;
+- short-failure matrix labeling likely failure modes;
+- Phase 4 skip-reason summary;
+- short-book diagnosis memo;
+- recommendation for whether to continue with symmetric `reversal_5d`, switch
+  to asymmetric short selection, or return to signal research.
+
+Exit criteria:
+
+- short-leg failure is attributed to a specific mechanism or marked unknown;
+- at least one candidate short-side remedy is specified without using test data;
+- Phase 5 is not started until the short-book caveat is explicitly accepted or
+  addressed.
+
+Phase 4B short-book diagnosis status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4b`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4b_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4b_short_book_diagnosis_20260418`;
+- input signal panel rows loaded from Phase 3: `4,572,955`;
+- side diagnostic rows: `143,162`;
+- side summary rows: `108`;
+- failure matrix rows: `48`;
+- skip summary rows: `6`;
+- candidate count for equal-weight side diagnostics: `30` names per side;
+- diagnosed signals: random control, `reversal_5d`, `momentum_20d`,
+  `momentum_60d`, beta-residual momentum, volatility-adjusted momentum,
+  liquidity rank, and transparent composite;
+- no transaction costs, borrow costs, turnover costs, candidate freeze, or
+  test-window performance was computed.
+
+Main finding:
+
+The Phase 4 short-book problem is more subtle than "the short alpha does not
+exist." In raw return terms, the short leg loses money on average across
+variants. In beta-residual terms, however, `reversal_5d` short candidates are
+positive in all six supported variants before beta matching, and the actual
+Phase 4 weighted short book remains beta-residual positive in all six variants.
+
+Key `reversal_5d` diagnostics:
+
+- mean equal-weight short beta-residual contribution across variants:
+  `0.000415`;
+- equal-weight short beta-residual contribution is positive in `6 / 6`
+  variants;
+- Phase 4 weighted short beta-residual contribution is also positive in `6 / 6`
+  variants;
+- raw short contribution remains negative across variants, for example
+  `-0.001641` in `top500_clean_core_beta_full` and `-0.002089` in
+  `top1000_clean_core_beta_full`;
+- weighted short beta-residual contribution is modest: `0.000242` in
+  `top500_clean_core_beta_full` and only `0.000063` in
+  `top1000_clean_core_beta_full`;
+- weighted long beta-residual contribution is still larger than short
+  contribution in `top500`, `top1000`, and `adv10m`, so the book is not yet
+  balanced from an alpha-contribution perspective.
+
+Signal comparison:
+
+- `reversal_5d` is the strongest short-side candidate in aggregate, with mean
+  equal-weight short beta-residual contribution `0.000415`;
+- `momentum_60d` is a weaker secondary short candidate, viable in `4 / 6`
+  variants with mean equal-weight short beta-residual contribution `0.000124`;
+- `momentum_20d`, beta-residual momentum, transparent composite, volatility-
+  adjusted momentum, and liquidity-rank short candidates are negative on
+  average in this diagnostic;
+- random control remains negative on average, which supports the diagnosis that
+  the `reversal_5d` short residual edge is not just mechanical noise.
+
+Constraint finding:
+
+All Phase 4 skipped sessions remain `beta_range_no_overlap`:
+
+- `top500_clean_core_beta_full`: `303` skipped sessions;
+- `top1000_clean_core_beta_full`: `236` skipped sessions;
+- `adv50m_clean_core_beta_full`: `298` skipped sessions;
+- `adv30m_clean_core_beta_full`: `280` skipped sessions;
+- `adv20m_clean_core_beta_full`: `273` skipped sessions;
+- `adv10m_clean_core_beta_full`: `253` skipped sessions.
+
+Interpretation:
+
+The original Phase 4 caveat should be refined. The short leg is not yet
+attractive on raw P&L, but it does show positive beta-residual contribution.
+For a pure-alpha product, beta-residual contribution is the cleaner diagnostic,
+while raw short P&L will often look bad in a rising market. The next research
+step should therefore avoid treating raw short loss as automatic failure, but
+should still challenge whether the short residual edge is large enough after
+costs, borrow, turnover, and skipped-session handling.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4b
+```
+
+Generated artifacts:
+
+- `phase4b_short_book_side_diagnostics_validation.csv`;
+- `phase4b_short_book_side_summary_validation.csv`;
+- `phase4b_short_failure_matrix_validation.csv`;
+- `phase4b_phase4_skip_summary_validation.csv`;
+- `phase4b_short_book_diagnosis_memo.md`;
+- `phase4b_short_book_diagnosis_rollup.json`.
+
+## Phase 4C: Residual Loser Selector Lab
+
+Goal:
+
+Research how to better identify future beta-residual losers without expanding
+the universe.
+
+Phase 4C deliberately keeps the same supported Phase 1 universe variants. It
+does not solve the short-book problem by reaching into a broader stock pool.
+Instead, it asks whether the current feature set can be transformed into better
+short-side selectors, and which new feature families should be sourced later.
+
+Diagnostic questions:
+
+- are future residual losers present inside the current universe?
+- how much headroom exists versus an oracle that knows future residual losers?
+- does the current `reversal_5d` short rule miss most future residual losers?
+- do price-only transformations such as overextension, weakness continuation,
+  beta fragility, price fragility, and liquidity fragility improve selection?
+- which feature families require new data before they can plausibly improve the
+  short book?
+
+Candidate selector families:
+
+- current Phase 4 short rule: recent 5-session winner;
+- weakness continuation: weak 20-session, weak 60-session, and weak residual
+  momentum;
+- overextension: 20-session winner plus 5-session extension;
+- residual overextension: 20-session residual winner plus 5-session extension;
+- breakdown after strength: 60-session strength plus recent 5-session weakness;
+- fragility proxies: high beta, lower price, lower ADV, lower liquidity;
+- fragile winner proxy: recent winner plus high beta and lower ADV;
+- random control.
+
+Deliverables:
+
+- daily selector diagnostics by variant and candidate selector;
+- selector summary table;
+- improvement-versus-current-reversal table;
+- same-universe residual-loser opportunity summary;
+- feature roadmap separating currently derivable features from new-data
+  feature families;
+- residual-loser lab memo.
+
+Exit criteria:
+
+- at least one candidate short selector is identified for a future Phase 4
+  construction rerun, or the current feature set is declared inadequate;
+- the need for new data is documented explicitly;
+- no universe expansion or test-window use occurs.
+
+Phase 4C residual-loser lab status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4c`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4c_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4c_residual_loser_lab_20260418`;
+- input signal panel rows loaded from Phase 3: `4,572,955`;
+- daily selector rows: `113,904`;
+- selector summary rows: `84`;
+- improvement-versus-reversal rows: `84`;
+- opportunity rows: `6`;
+- feature-roadmap rows: `8`;
+- candidate count per selector: `30` names;
+- loser quantile for capture diagnostics: bottom `20%` by future beta-residual
+  return;
+- no universe expansion, transaction costs, borrow costs, portfolio
+  construction, model selection, candidate freeze, or test-window performance
+  was computed.
+
+Same-universe opportunity:
+
+- future beta-residual losers are present inside the current supported
+  universes: the mean negative residual share is about `49.3% ~ 49.4%` across
+  variants;
+- the oracle bottom-30 short residual contribution is very large, around
+  `0.0697` in `top500_clean_core_beta_full`, `0.0851` in
+  `top1000_clean_core_beta_full`, and `0.0814` in `adv10m_clean_core_beta_full`;
+- this oracle is not tradable and uses future labels, but it proves the problem
+  is not simply "there are no losers in the current universe."
+
+Main selector finding:
+
+The best same-universe price-only direction is not generic weakness
+continuation. It is overextension:
+
+- `short_exhausted_winner_20_5` is the strongest aggregate selector, with mean
+  short beta-residual contribution `0.000995` across supported variants;
+- `short_residual_overextension_20_5` is second, with mean `0.000932`;
+- the current `short_reversal_winner` baseline averages only `0.000415`;
+- `short_exhausted_winner_20_5` improves over the current reversal short rule
+  in all six variants;
+- `top500_clean_core_beta_full` is an exception where `short_fragile_winner_proxy`
+  is best at `0.001149`, slightly ahead of `short_exhausted_winner_20_5` at
+  `0.001117`;
+- `top1000_clean_core_beta_full` improves from `0.000225` under current
+  reversal short selection to `0.000576` under `short_exhausted_winner_20_5`;
+- `adv20m_clean_core_beta_full` improves from `0.000696` to `0.001181`;
+- `adv30m_clean_core_beta_full` improves from `0.000545` to `0.001155`;
+- `adv50m_clean_core_beta_full` improves from `0.000229` to `0.000986`;
+- `adv10m_clean_core_beta_full` improves from `0.000471` to `0.000953`.
+
+Negative selector finding:
+
+- weak 20-session momentum and weak residual 20-session momentum are negative
+  on average as short selectors in this diagnostic;
+- lower ADV / lower liquidity proxy is also negative on average;
+- this argues against the naive idea that the short book should simply short
+  already-weak or lower-liquidity names;
+- current evidence points instead to "overextended winners that start to mean
+  revert" as the better same-universe residual-loser direction.
+
+New-data roadmap:
+
+Currently derivable features can improve the short selector, but the oracle gap
+remains enormous. Before a product candidate freeze, the short book likely
+needs richer information:
+
+- fundamental quality: profitability, accruals, leverage, dilution, and margin
+  deterioration;
+- earnings and revisions: estimate cuts, negative surprises, guidance cuts, and
+  post-earnings drift;
+- valuation and growth mismatch: expensive names with slowing growth or margin
+  pressure;
+- borrow and short-interest data: borrow fee, utilization, shares available,
+  short interest, and days to cover;
+- event and news risk: fraud, regulatory, legal, downgrade, and product-failure
+  flags.
+
+Interpretation:
+
+Phase 4C refines the short-book path. We should not expand the universe yet.
+The current universe already contains many residual losers, but the existing
+short selector is too blunt. The next construction pass should test an
+asymmetric short side using `short_exhausted_winner_20_5` and possibly
+`short_residual_overextension_20_5` or `short_fragile_winner_proxy`, while
+keeping the long side separately evaluated. If these price-only improvements do
+not survive beta matching and costs, the next research bottleneck is feature
+quality, not universe width.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4c
+```
+
+Generated artifacts:
+
+- `phase4c_residual_loser_selector_daily_validation.csv`;
+- `phase4c_residual_loser_selector_summary_validation.csv`;
+- `phase4c_residual_loser_improvement_vs_reversal_validation.csv`;
+- `phase4c_residual_loser_universe_opportunity_validation.csv`;
+- `phase4c_residual_loser_feature_roadmap.csv`;
+- `phase4c_residual_loser_lab_memo.md`;
+- `phase4c_residual_loser_lab_rollup.json`.
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -966,11 +1261,12 @@ Recommended implementation order:
 2. Add lagged beta estimation.
 3. Run random and simple-factor baselines.
 4. Build a simple beta-matched portfolio constructor.
-5. Emit a minimal long-short backtest artifact bundle.
-6. Add cost, turnover, and borrow stress.
-7. Plug outputs into the shared robustness suite.
-8. Freeze the best validation-only candidate.
-9. Only then consider a test lockbox run.
+5. Diagnose short-book failure before formalizing the backtest.
+6. Emit a minimal long-short backtest artifact bundle.
+7. Add cost, turnover, and borrow stress.
+8. Plug outputs into the shared robustness suite.
+9. Freeze the best validation-only candidate.
+10. Only then consider a test lockbox run.
 
 ## Immediate Next Deliverables
 
@@ -984,6 +1280,10 @@ Near-term deliverables:
   `2026-04-18` Phase 3 baseline signal builder
 - first beta-matched long-short baseline: generated with the `2026-04-18`
   Phase 4 portfolio constructor
+- short-book failure diagnosis before Phase 5: generated with the `2026-04-18`
+  Phase 4B diagnostic builder
+- same-universe residual-loser selector lab: generated with the `2026-04-18`
+  Phase 4C diagnostic builder
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
