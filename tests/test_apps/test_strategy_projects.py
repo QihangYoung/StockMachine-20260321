@@ -38,6 +38,10 @@ def test_load_strategy_project_returns_expected_metadata() -> None:
     assert pure_alpha.entrypoints["phase4_app"] == "stockmachine.apps.run_pure_alpha_phase4"
     assert pure_alpha.entrypoints["phase4b_app"] == "stockmachine.apps.run_pure_alpha_phase4b"
     assert pure_alpha.entrypoints["phase4c_app"] == "stockmachine.apps.run_pure_alpha_phase4c"
+    assert pure_alpha.entrypoints["phase4d_app"] == "stockmachine.apps.run_pure_alpha_phase4d"
+    assert pure_alpha.entrypoints["phase4e_app"] == "stockmachine.apps.run_pure_alpha_phase4e"
+    assert pure_alpha.entrypoints["phase4f_app"] == "stockmachine.apps.run_pure_alpha_phase4f"
+    assert pure_alpha.entrypoints["phase4g_app"] == "stockmachine.apps.run_pure_alpha_phase4g"
 
 
 def test_resolve_strategy_project_path_supports_builtin_ids() -> None:

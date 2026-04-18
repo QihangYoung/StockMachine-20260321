@@ -1077,6 +1077,556 @@ Generated artifacts:
 - `phase4c_residual_loser_lab_memo.md`;
 - `phase4c_residual_loser_lab_rollup.json`.
 
+## Phase 4D: Tree Residual-Loser Selector
+
+Goal:
+
+Test whether a simple tree model can outperform the same-universe price-only
+short selectors from Phase 4C.
+
+Phase 4D is still a selector diagnostic, not a portfolio construction pass. The
+model is allowed to combine existing Phase 3 features nonlinearly, but it must
+respect time ordering. It trains only on older validation sessions, leaves a
+label embargo before each prediction block, and does not expand the universe.
+
+Default model:
+
+- model: `sklearn.ensemble.ExtraTreesRegressor`;
+- target: `forward_beta_residual_return_5d`;
+- selector score: negative predicted residual return;
+- higher selector score means more likely residual loser;
+- default variant: `top1000_clean_core_beta_full`;
+- initial train window: `252` sessions;
+- label embargo: `5` sessions;
+- prediction block: `126` sessions;
+- maximum training rows per fold: `150,000`;
+- estimators: `96`;
+- max depth: `5`;
+- minimum samples per leaf: `200`.
+
+Features:
+
+- lagged price and trailing dollar-volume logs;
+- liquidity rank and beta;
+- 5-session return, 20-session momentum, 60-session momentum;
+- beta-residual 20-session momentum;
+- volatility-adjusted 20-session momentum;
+- cross-sectional z-scores of return, momentum, beta, and liquidity;
+- Phase 4C overextension features: `exhausted_winner_20_5`,
+  `residual_overextension_20_5`, and `fragile_winner_proxy`.
+
+Deliverables:
+
+- tree selector predictions;
+- daily selector diagnostics;
+- selector summary table;
+- rolling fold manifest;
+- feature-importance summary;
+- tree selector memo.
+
+Exit criteria:
+
+- tree selector beats the best Phase 4C price-only selector on the same date
+  span, or is rejected;
+- fold manifest proves the model uses only prior sessions plus embargo;
+- no model output is promoted into a portfolio without a new Phase 4
+  construction pass.
+
+Phase 4D tree-selector status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4d`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4d_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4d_tree_residual_loser_selector_20260418`;
+- variant tested: `top1000_clean_core_beta_full`;
+- feature panel rows loaded: `918,968`;
+- prediction rows: `755,241`;
+- daily diagnostic rows: `1,099`;
+- rolling folds: `9`;
+- prediction span: `2015-08-12` through `2019-12-20`;
+- no universe expansion, portfolio construction, transaction costs, borrow
+  costs, candidate freeze, or test-window performance was computed.
+
+Result:
+
+The first tree selector is rejected.
+
+- mean short beta-residual contribution: `-0.001210`;
+- short residual hit rate: `0.478617`;
+- mean short raw contribution: `-0.005399`;
+- mean oracle overlap rate: `0.093479`;
+- mean RankIC of loser score versus forward residual: `-0.010697`;
+- same-date-span Phase 4C `short_exhausted_winner_20_5`: `0.000891`;
+- same-date-span Phase 4C `short_residual_overextension_20_5`: `0.000753`;
+- same-date-span current reversal short rule: `0.000489`.
+
+Feature-importance diagnosis:
+
+The model places large importance on beta and liquidity proxies rather than on
+the overextension features that performed best in Phase 4C:
+
+- `beta_z`: `0.136675`;
+- `beta`: `0.120422`;
+- `liquidity_rank_z`: `0.095597`;
+- `liquidity_rank`: `0.087999`;
+- `vol_adjusted_momentum_20d`: `0.070821`;
+- `momentum_60d_z`: `0.066215`.
+
+Interpretation:
+
+The tree model learned some weak cross-sectional direction, but it failed as a
+top-30 residual-loser selector. The issue is tail calibration: the model's top
+short candidates have positive realized residual returns on average, producing
+negative short contribution. A quick classifier-style bottom-20% loser check
+showed the same pattern, so the immediate bottleneck is not merely regression
+versus classification. With the current price-only feature set, the transparent
+Phase 4C overextension rule is better than the tree model. Tree models should
+not be promoted until richer features, such as fundamentals, revisions, borrow,
+short interest, or event data, are available and timestamp-safe.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4d
+```
+
+Generated artifacts:
+
+- `phase4d_tree_selector_predictions_validation.csv.gz`;
+- `phase4d_tree_selector_daily_validation.csv`;
+- `phase4d_tree_selector_summary_validation.csv`;
+- `phase4d_tree_selector_fold_manifest_validation.csv`;
+- `phase4d_tree_selector_feature_importance_validation.csv`;
+- `phase4d_tree_selector_memo.md`;
+- `phase4d_tree_selector_rollup.json`.
+
+## Phase 4E: Feature Independence Analysis
+
+Goal:
+
+Measure whether the current Phase 4D feature set is independently informative
+about future 5-session beta-residual returns, and measure how independent the
+features are from each other.
+
+This phase is explicitly about independence, not linear or rank correlation.
+The diagnostic uses quantile-discretized normalized mutual information (`NMI`)
+with a permutation baseline. A feature can have low Pearson/Spearman
+correlation but still be dependent in a nonlinear way; NMI is used to catch
+that class of relationship. Excess NMI near `0` means approximately independent
+after subtracting finite-sample permutation bias.
+
+Default method:
+
+- feature set: the same `19` Phase 4D selector features;
+- target: `forward_beta_residual_return_5d`;
+- default variant: `top1000_clean_core_beta_full`;
+- metric: quantile-discretized normalized mutual information;
+- bins: `10`;
+- maximum sampled rows per variant: `200,000`;
+- permutation baseline count: `5`;
+- feature-cluster threshold: `0.05` excess NMI;
+- no Pearson or Spearman correlation is used;
+- no test-window performance is computed.
+
+Deliverables:
+
+- feature-target independence table;
+- feature-pair independence table;
+- strong feature-dependence cluster table;
+- sample manifest;
+- feature independence memo.
+
+Exit criteria:
+
+- identify whether any existing feature has meaningful standalone nonlinear
+  dependence with future 5-session beta-residual returns;
+- identify redundant feature families before adding more tree models;
+- keep test lockbox closed.
+
+Phase 4E feature-independence status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4e`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4e_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4e_feature_independence_20260418`;
+- variant tested: `top1000_clean_core_beta_full`;
+- feature panel rows loaded: `918,968`;
+- complete-case rows: `918,968`;
+- sampled rows: `200,000`;
+- sample span: `2014-08-05` through `2019-12-20`;
+- feature-target rows: `19`;
+- feature-pair rows: `171`;
+- strong feature-dependence clusters: `1`;
+- no test-window performance was computed.
+
+Feature-target result:
+
+The current features are close to independent from future 5-session
+beta-residual returns on a standalone basis. The highest excess NMI values are
+small:
+
+- `beta_z`: `0.007072`;
+- `beta`: `0.005538`;
+- `momentum_60d`: `0.005501`;
+- `fragile_winner_proxy`: `0.005178`;
+- `lagged_close_log`: `0.005108`;
+- `beta_residual_momentum_20d`: `0.004540`;
+- `return_5d`: `0.004277`;
+- `momentum_20d`: `0.004192`;
+- `residual_overextension_20_5`: `0.003748`;
+- `exhausted_winner_20_5`: `0.003684`.
+
+Interpretation:
+
+This supports the Phase 4D failure diagnosis. The existing price/liquidity/beta/
+momentum feature set does not contain strong single-feature nonlinear
+information about future residual losers. Phase 4C works better because it is a
+simple tail heuristic, not because the current feature set contains a rich,
+learnable residual-loser map.
+
+Feature-feature result:
+
+The features are not mutually independent. They form one large same-source
+dependence cluster covering `18 / 19` features. The strongest pairwise excess
+NMI values are:
+
+- `liquidity_rank` vs `liquidity_rank_z`: `0.768569`;
+- `exhausted_winner_20_5` vs `residual_overextension_20_5`: `0.749127`;
+- `trailing_median_dollar_volume_20_log` vs `liquidity_rank_z`: `0.656557`;
+- `momentum_20d_z` vs `beta_residual_momentum_20d_z`: `0.640106`;
+- `trailing_median_dollar_volume_20_log` vs `liquidity_rank`: `0.584077`;
+- `beta_residual_momentum_20d` vs `beta_residual_momentum_20d_z`: `0.538551`;
+- `momentum_20d` vs `vol_adjusted_momentum_20d`: `0.535294`;
+- `beta` vs `beta_z`: `0.519535`.
+
+Interpretation:
+
+The model input matrix is wide but not diverse. Many fields are transformed
+versions of the same price, liquidity, beta, and momentum ingredients. This
+means a tree model can easily spend splits on redundant proxies without gaining
+new information about residual losers.
+
+Research implication:
+
+Before another flexible selector is promoted, Phase 4 should add genuinely new
+timestamp-safe information families or intentionally compress the current
+feature set. Candidate new families include fundamentals, analyst revisions,
+earnings/event timing, short interest, borrow cost and availability, sector/
+industry residual context, and richer intraday/liquidity microstructure. If new
+data is not available, the safer path is to keep the transparent Phase 4C
+overextension short rule as the current diagnostic baseline.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4e
+```
+
+Generated artifacts:
+
+- `phase4e_feature_target_independence_validation.csv`;
+- `phase4e_feature_pair_independence_validation.csv`;
+- `phase4e_feature_dependence_clusters_validation.csv`;
+- `phase4e_feature_independence_sample_manifest_validation.csv`;
+- `phase4e_feature_independence_memo.md`;
+- `phase4e_feature_independence_rollup.json`.
+
+## Phase 4F: Feature Posterior Shape Diagnostics
+
+Goal:
+
+Translate Phase 4E feature-target non-independence into conditional target
+distributions that are easier to reason about as selectors.
+
+The information-theory interpretation is:
+
+If feature `X` and target `Y` are not independent, then knowing `X = x` should
+change the posterior distribution `P(Y | X = x)`. Phase 4F makes that concrete
+by binning each feature and measuring the future 5-session beta-residual return
+distribution inside each bin.
+
+Default method:
+
+- feature set: the same `19` Phase 4D selector features;
+- target: `forward_beta_residual_return_5d`;
+- default variant: `top1000_clean_core_beta_full`;
+- feature buckets: `10` validation-sample quantile bins;
+- residual-loser tail: bottom `20%` of validation targets;
+- regimes: `all`, `market_up_5d`, and `market_down_5d`;
+- diagnostic statistics: conditional mean, median, standard deviation, q10,
+  q25, q75, q90, negative residual share, bottom-loser share, and hypothetical
+  equal-weight short contribution for each bin;
+- no beta-matched portfolio, transaction-cost model, borrow model, or test
+  window is used.
+
+Important guardrail:
+
+The regime split uses the realized future 5-session benchmark return only to
+diagnose what happened. It is not a tradable real-time regime label.
+
+Deliverables:
+
+- feature-bin posterior distribution table;
+- high-minus-low extreme-bin comparison table;
+- sample manifest;
+- posterior-shape memo.
+
+Exit criteria:
+
+- determine whether the Phase 4E non-independence is directionally useful for
+  residual-loser selection;
+- identify whether `beta` changes the posterior mean, the left-tail
+  probability, or both;
+- keep test lockbox closed.
+
+Phase 4F posterior-shape status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4f`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4f_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4f_feature_posterior_shapes_20260418`;
+- variant tested: `top1000_clean_core_beta_full`;
+- feature panel rows loaded: `918,968`;
+- complete-case rows: `918,968`;
+- sample span: `2014-08-05` through `2019-12-20`;
+- posterior-bin rows: `570`;
+- extreme-comparison rows: `57`;
+- no test-window performance was computed.
+
+Beta posterior result:
+
+`beta` does change the target posterior, which is consistent with Phase 4E's
+weak non-independence result. The effect is directionally meaningful in tail
+probability, but only modest in average return.
+
+For absolute `beta`, comparing the highest beta decile with the lowest beta
+decile:
+
+- all regimes: mean residual moves from `0.001006` to `-0.000058`;
+- all regimes: high-minus-low short contribution is `0.001064`;
+- all regimes: bottom-20% residual-loser share rises from `16.90%` to `28.70%`;
+- all regimes: negative residual share rises from `47.24%` to `51.35%`;
+- market-up 5-session windows: high-minus-low short contribution is `0.001265`;
+- market-down 5-session windows: high-minus-low short contribution is only
+  `0.000565`.
+
+For cross-sectional `beta_z`, comparing the highest beta-z decile with the
+lowest beta-z decile:
+
+- all regimes: mean residual moves from `0.001001` to `-0.000435`;
+- all regimes: high-minus-low short contribution is `0.001436`;
+- all regimes: bottom-20% residual-loser share rises from `16.89%` to `30.12%`;
+- market-down 5-session windows: high-minus-low short contribution is
+  `0.002976`;
+- market-up 5-session windows: high-minus-low short contribution is only
+  `0.000534`.
+
+Interpretation:
+
+The user's information-theory intuition is confirmed: knowing `beta` or
+`beta_z` narrows or reshapes the posterior distribution of future beta-residual
+return. But the shape matters. The strongest beta effect is in left-tail
+probability, not in a large stable negative mean. A highest-beta decile short
+has elevated loser odds, but its unconditional average residual short
+contribution is small.
+
+This means `beta` is better interpreted as a residual-tail-risk conditioner
+than as a standalone residual-loser selector. It may be useful as an interaction
+or risk overlay, especially combined with overextension and regime-aware
+features, but it does not by itself solve the short-book selection problem.
+
+Feature posterior result beyond beta:
+
+The largest high-minus-low short-contribution contrasts appear mostly in
+momentum / overextension features during market-up windows:
+
+- `momentum_20d`, market-up: `0.006683`;
+- `beta_residual_momentum_20d`, market-up: `0.005779`;
+- `vol_adjusted_momentum_20d`, market-up: `0.005716`;
+- `momentum_20d_z`, market-up: `0.005504`;
+- `momentum_60d`, market-up: `0.005264`;
+- `exhausted_winner_20_5`, market-up: `0.005185`;
+- `residual_overextension_20_5`, market-up: `0.005000`.
+
+This reinforces the Phase 4C result: the current usable short-side signal is
+still closer to an overextension / exhausted-winner tail heuristic than to a
+general learned residual-loser model.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4f
+```
+
+Generated artifacts:
+
+- `phase4f_feature_posterior_bins_validation.csv`;
+- `phase4f_feature_posterior_extremes_validation.csv`;
+- `phase4f_feature_posterior_sample_manifest_validation.csv`;
+- `phase4f_feature_posterior_memo.md`;
+- `phase4f_feature_posterior_rollup.json`.
+
+## Phase 4G: Robust Feature Utility Re-Ranking
+
+Goal:
+
+Re-rank the current feature set using robust posterior metrics so that a
+feature is not promoted merely because it increases left-tail hit rate or gets
+lucky on a few extreme residual losers.
+
+Phase 4G keeps the nonlinear shape view from Phase 4F, but changes the pass
+criteria. A useful short-side feature bucket should show robust weakness in the
+ordinary part of the distribution, not just in the far left tail.
+
+Default method:
+
+- feature set: the same `19` Phase 4D selector features;
+- target: `forward_beta_residual_return_5d`;
+- default variant: `top1000_clean_core_beta_full`;
+- feature buckets: `10` validation-sample quantile bins;
+- selected bin per feature: the bin with the lowest `10/90` trimmed residual
+  mean;
+- left-tail residual-loser cutoff: bottom `20%` of validation targets;
+- right-tail residual-winner cutoff: top `20%` of validation targets;
+- right-tail tolerance versus universe: `2` percentage points;
+- primary robust metrics: median residual, `10/90` trimmed mean, `5/95`
+  winsorized mean, bottom-loser share, top-winner share, and tail balance;
+- regimes: `all`, `market_up_5d`, and `market_down_5d`;
+- no beta-matched portfolio, transaction-cost model, borrow model, or test
+  window is used.
+
+Interpretation rules:
+
+- strong candidate: median, trimmed mean, and winsorized mean all support the
+  short side; right-tail winner risk is controlled; robust edge is present in
+  at least two regimes;
+- promising but risky: robust center-of-distribution edge exists, but right
+  tail or regime stability is not clean enough;
+- tail-only candidate: left-tail hit rate is high, but center-of-distribution
+  robustness is weak;
+- weak candidate: no robust short-side edge.
+
+Deliverables:
+
+- robust feature-bin table;
+- universe robust baseline table;
+- robust feature summary table;
+- sample manifest;
+- robust feature utility memo.
+
+Exit criteria:
+
+- identify which current features remain useful after median / trimmed / right
+  tail checks;
+- explicitly demote features whose value is mostly volatility or left-tail
+  lottery exposure;
+- keep test lockbox closed.
+
+Phase 4G robust feature utility status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4g`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4g_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4g_robust_feature_utility_20260418`;
+- variant tested: `top1000_clean_core_beta_full`;
+- feature panel rows loaded: `918,968`;
+- complete-case rows: `918,968`;
+- sample span: `2014-08-05` through `2019-12-20`;
+- robust feature-bin rows: `570`;
+- robust feature summary rows: `19`;
+- no test-window performance was computed.
+
+Universe robust baseline:
+
+- all validation rows: median residual `0.000382`;
+- all validation rows: `10/90` trimmed residual mean `0.000345`;
+- all validation rows: `5/95` winsorized residual mean `0.000331`;
+- all validation rows: bottom-loser share `20.00%`;
+- all validation rows: top-winner share `20.00%`.
+
+Cleanest robust short-side candidates:
+
+The strongest robust candidates are high momentum / overextension buckets, not
+standalone beta:
+
+| Feature | Selected Bin | Trimmed Short | Median Short | Winsor Short | Bottom Share | Top Share | Tail Balance |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `momentum_20d` | `10` | `0.001208` | `0.001288` | `0.001188` | `24.56%` | `21.86%` | `2.70%` |
+| `beta_residual_momentum_20d_z` | `10` | `0.000839` | `0.000747` | `0.000896` | `24.19%` | `21.98%` | `2.21%` |
+| `vol_adjusted_momentum_20d` | `10` | `0.000659` | `0.000458` | `0.000712` | `18.64%` | `16.48%` | `2.16%` |
+
+These are the only `1_robust_short_candidate` labels in the first robust pass.
+They pass because the center of the distribution is weaker, not only because
+the left tail is fatter.
+
+Promising but less clean candidates:
+
+Several features have robust short-side center metrics, but either right-tail
+winner risk is too high or regime behavior is less clean:
+
+- `exhausted_winner_20_5`: trimmed short `0.001229`, median short `0.001149`,
+  top-winner share `22.43%`;
+- `residual_overextension_20_5`: trimmed short `0.001137`, median short
+  `0.001046`, top-winner share `22.36%`;
+- `beta_z`: trimmed short `0.001122`, median short `0.001399`, top-winner share
+  `27.85%`;
+- `momentum_20d_z`: trimmed short `0.000956`, median short `0.000861`,
+  top-winner share `22.14%`;
+- `beta_residual_momentum_20d`: trimmed short `0.000918`, median short
+  `0.000883`, top-winner share `22.38%`;
+- `beta`: trimmed short `0.000713`, median short `0.001212`, top-winner share
+  `26.92%`.
+
+Beta interpretation after robust checks:
+
+`beta` and `beta_z` are not useless. They do shift the posterior and their
+highest deciles have robust negative center metrics. But they also carry much
+higher right-tail residual-winner risk:
+
+- `beta_z` highest decile: bottom-loser share `30.12%`, but top-winner share
+  `27.85%`;
+- `beta` highest decile: bottom-loser share `28.70%`, but top-winner share
+  `26.92%`.
+
+That is too symmetric for a clean standalone short alpha. Beta remains better
+classified as a tail-risk / volatility conditioner than as a primary
+residual-loser selector.
+
+Research implication:
+
+The current strongest same-data-family short-side evidence is still the
+overextended-winner family. A future selector should emphasize robust center
+weakness and controlled right-tail risk. Concretely, the next short-side rule
+should prioritize:
+
+- high `momentum_20d`;
+- high residual or z-scored residual momentum;
+- high exhausted-winner / residual-overextension score;
+- optional beta conditioning only when right-tail winner risk is capped.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4g
+```
+
+Generated artifacts:
+
+- `phase4g_robust_feature_bins_validation.csv`;
+- `phase4g_robust_feature_baseline_validation.csv`;
+- `phase4g_robust_feature_summary_validation.csv`;
+- `phase4g_robust_feature_sample_manifest_validation.csv`;
+- `phase4g_robust_feature_utility_memo.md`;
+- `phase4g_robust_feature_utility_rollup.json`.
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -1284,6 +1834,18 @@ Near-term deliverables:
   Phase 4B diagnostic builder
 - same-universe residual-loser selector lab: generated with the `2026-04-18`
   Phase 4C diagnostic builder
+- tree residual-loser selector check: generated with the `2026-04-18` Phase 4D
+  diagnostic builder and rejected for the first top1000 pass
+- feature independence analysis: generated with the `2026-04-18` Phase 4E
+  diagnostic builder, showing weak standalone feature-target dependence and
+  high feature-feature redundancy
+- feature posterior-shape diagnostics: generated with the `2026-04-18` Phase
+  4F diagnostic builder, showing that beta changes residual-loser tail odds but
+  is not a strong standalone short selector
+- robust feature utility re-ranking: generated with the `2026-04-18` Phase 4G
+  diagnostic builder, showing that high momentum / overextension features are
+  cleaner short-side candidates than standalone beta after median, trimmed
+  mean, and right-tail checks
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
