@@ -619,6 +619,57 @@ Exit criteria:
 - signal is not just market beta or sector tilt
 - signal survives basic cost assumptions
 
+Phase 3 baseline status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase3`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase3_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase3_baseline_signals_20260418`;
+- validation span used by the labeled signal panel: `2014-08-05` through
+  `2019-12-20`;
+- signal panel rows: `4,572,955`;
+- daily diagnostic rows: `65,088`;
+- leaderboard rows: `48`;
+- primary target: `forward_beta_residual_return_5d`;
+- forward label: adjusted open-to-open return from the next session open to the
+  open after the configured holding period;
+- baseline signal families: random control, 5-session reversal, 20-session
+  momentum, 60-session momentum, beta-residual momentum, volatility-adjusted
+  momentum, liquidity rank, and a transparent composite;
+- strongest simple validation baseline across supported variants:
+  `reversal_5d`;
+- recommended `top500_clean_core_beta_full` snapshot: mean RankIC `0.011937`,
+  mean top-minus-bottom beta-residual spread `0.000818`, spread hit rate
+  `0.519174`;
+- random control sanity check is near zero on the same variant: mean RankIC
+  `0.000062`, mean spread `-0.000100`;
+- no beta-matched portfolio construction, model selection, production claim, or
+  test-window performance was computed.
+
+Interpretation:
+
+The first transparent result says "there is a small but measurable validation
+reversal effect worth challenging." It does not yet say "we have a product."
+The next step must translate the score into a beta-matched long-short book,
+charge realistic costs, and verify that both legs contribute after constraints.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase3
+```
+
+Generated artifacts:
+
+- `phase3_baseline_signal_panel_validation.csv.gz`;
+- `phase3_baseline_signal_daily_diagnostics_validation.csv`;
+- `phase3_baseline_signal_leaderboard_validation.csv`;
+- `phase3_signal_correlation_validation.csv`;
+- `phase3_baseline_signal_memo.md`;
+- `phase3_baseline_signal_rollup.json`.
+
 ## Phase 4: Beta-Matched Long-Short Portfolio Constructor
 
 Goal:
@@ -848,9 +899,9 @@ Recommended implementation order:
 
 1. Create the high-liquidity universe builder.
 2. Add lagged beta estimation.
-3. Build a simple beta-matched portfolio constructor.
-4. Emit a minimal long-short backtest artifact bundle.
-5. Run random and simple-factor baselines.
+3. Run random and simple-factor baselines.
+4. Build a simple beta-matched portfolio constructor.
+5. Emit a minimal long-short backtest artifact bundle.
 6. Add cost, turnover, and borrow stress.
 7. Plug outputs into the shared robustness suite.
 8. Freeze the best validation-only candidate.
@@ -864,9 +915,11 @@ Near-term deliverables:
   `2026-04-18` Phase 1 universe builder
 - lagged beta panel and diagnostics: generated with the `2026-04-18` Phase 2
   beta builder
+- validation-only transparent signal diagnostics: generated with the
+  `2026-04-18` Phase 3 baseline signal builder
 - first beta-matched long-short baseline
 - robustness-compatible artifact manifest
-- validation-only baseline memo
+- validation-only portfolio baseline memo
 
 The first baseline does not need to be impressive. It needs to be clean,
 leakage-safe, beta-aware, and easy to challenge.
