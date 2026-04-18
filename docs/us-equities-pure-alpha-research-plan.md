@@ -2208,6 +2208,85 @@ $env:PYTHONPATH='src'
 python -m stockmachine.apps.run_pure_alpha_phase4l
 ```
 
+## Phase 4M: Ridge Short-Side Selector
+
+Goal:
+
+Test whether a simple regularized linear model can improve short-side
+residual-loser selection by combining several high-quality but correlated
+features.
+
+Model:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4m`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4m_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4m_ridge_short_selector_20260418`;
+- target: `cs_demeaned_beta_residual`;
+- Ridge alpha: `10.0`;
+- score: `ridge_short_score = - predicted residual return`;
+- train/predict protocol: rolling validation-only Ridge with `252` initial
+  train sessions, `5` session h5 label embargo, and `126` session prediction
+  blocks;
+- test lockbox status: `validation_only_no_test_window_performance`.
+
+Stage-gating standard:
+
+- primary decision standard for short-side selector research:
+  standalone top-N residual-loser selection performance;
+- secondary diagnostics: beta-matched portfolio construction, common-session
+  portfolio spread, construction rate, and beta feasibility;
+- reason: beta-matched construction can change the evaluated session set and
+  mix selector quality with long-book behavior, beta overlap, and optimizer
+  feasibility;
+- promotion rule: do not promote a short selector unless it beats the
+  transparent baseline on standalone selector performance.
+
+Input features:
+
+- `momentum_20d_z`;
+- `beta_residual_momentum_20d_z`;
+- `vol_adjusted_momentum_20d_z`;
+- `exhausted_winner_20_5`;
+- `residual_overextension_20_5`;
+- `return_5d_z`;
+- `beta_z`;
+- `fragile_winner_proxy`.
+
+Selector-only result:
+
+| Variant | Selector | Mean Short CS Contribution | Hit Rate | RankIC |
+|---|---|---:|---:|---:|
+| `adv30m_clean_core_beta_full` | `short_core_plus_overextension` | `0.001797` | `0.5287` | `-0.0258` |
+| `adv30m_clean_core_beta_full` | `ridge_short_score` | `0.001338` | `0.5141` | `-0.0110` |
+| `top1000_clean_core_beta_full` | `short_core_plus_overextension` | `0.001608` | `0.5050` | `-0.0241` |
+| `top1000_clean_core_beta_full` | `ridge_short_score` | `0.001194` | `0.5187` | `-0.0132` |
+
+Portfolio common-session check, secondary only:
+
+| Pair | Common Sessions | Ridge Minus Baseline CS Spread | Ridge Minus Baseline Short CS |
+|---|---:|---:|---:|
+| `top1000` long + `adv30m` short | `512` | `0.000211` | `0.000474` |
+| `top1000` long + `top1000` short | `558` | `-0.000815` | `-0.000426` |
+
+Interpretation:
+
+The first Ridge attempt does not beat the transparent overextension selector as
+a standalone top30 short selector. Under the current stage-gating rule, this
+means Ridge is not promoted. The `top1000` long + `adv30m` short common-session
+portfolio improvement is treated only as a diagnostic clue, because portfolio
+construction filters the sample and mixes short-selector quality with long-book
+behavior, beta overlap, and optimizer feasibility. It is not enough to override
+the weaker standalone result.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4m
+```
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -2443,6 +2522,11 @@ Near-term deliverables:
 - top2000 feasibility audit: generated with the `2026-04-18` Phase 4L audit
   builder, keeping `top1500` / `top2000` / `top3000` blocked until a
   timestamp-safe broader data layer exists
+- Ridge short-side selector: generated with the `2026-04-18` Phase 4M
+  diagnostic builder, showing that Ridge does not beat transparent
+  overextension standalone and therefore is not promoted; common-session
+  portfolio value for `top1000` long plus `adv30m` short is kept as secondary
+  diagnostic evidence only
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
