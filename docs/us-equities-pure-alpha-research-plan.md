@@ -458,6 +458,40 @@ The provisional Phase 0 membership artifact is acceptable as the template for
 that module, but Phase 1 should re-run it from a repeatable ingestion pipeline
 and with the final selected data source.
 
+Phase 1 builder status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase1`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase1_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase1_universe_builder_20260418`;
+- recommended mechanics default: `top500_clean_core_beta_full`;
+- supported diagnostics: `top1000_clean_core_beta_full`, `adv50m`,
+  `adv30m`, `adv20m`, and `adv10m` clean-core beta-full variants;
+- blocked variants: top1500/top2000/top3000, because the current backfill has
+  only current-top1000-scope symbols;
+- first 20-by-20 long/short readiness date: `2014-08-05`;
+- `top500_clean_core_beta_full` median members: `454.0`, minimum members:
+  `446`;
+- no alpha signal, return, model selection, or test-window performance was
+  computed.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase1
+```
+
+Generated artifacts:
+
+- `phase1_candidate_universe_membership_validation.csv.gz`;
+- `phase1_candidate_universe_daily_counts_validation.csv`;
+- `phase1_candidate_universe_summary_validation.csv`;
+- `phase1_universe_stability_manifest.csv`;
+- `phase1_universe_builder_memo.md`;
+- `phase1_universe_builder_rollup.json`.
+
 ## Phase 2: Beta Estimation Layer
 
 Goal:
@@ -790,7 +824,8 @@ Recommended implementation order:
 
 Near-term deliverables:
 
-- `us_equities_pure_alpha_h5` universe coverage report
+- `us_equities_pure_alpha_h5` universe coverage report: started with the
+  `2026-04-18` Phase 1 universe builder
 - lagged beta panel and diagnostics
 - first beta-matched long-short baseline
 - robustness-compatible artifact manifest
