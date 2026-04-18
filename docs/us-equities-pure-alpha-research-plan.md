@@ -717,6 +717,71 @@ Exit criteria:
 - long and short books are both economically active
 - constraints are visible in artifacts
 
+Phase 4 beta-matched portfolio status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4_beta_matched_portfolios_20260418`;
+- input signal panel rows loaded from Phase 3: `4,572,955`;
+- baseline signal: `reversal_5d`;
+- validation span: `2014-08-05` through `2019-12-20`;
+- constructed session rows: `6,493`;
+- skipped session rows: `1,643`;
+- position rows: `363,186`;
+- construction setting: `100/100` gross, `20` target names per side, up to
+  `30` candidates per side, `5%` max single-name side weight, and `0.05` net
+  beta tolerance;
+- required nonzero names per side is effectively `20`, because a `5%` single-
+  name cap needs at least `20` positions to fill one side;
+- all skipped sessions were due to `beta_range_no_overlap`, meaning the top and
+  bottom candidate sets could not be beta-matched under the first strict weight
+  constraints;
+- constructed books achieved near-zero ex-ante net beta; mean absolute net beta
+  is numerical-noise level across variants;
+- recommended `top500_clean_core_beta_full` snapshot: construction rate
+  `0.776549`, mean overlapping 5-session spread `0.000925`, spread hit rate
+  `0.518519`, and median `29` nonzero names per side;
+- `top1000_clean_core_beta_full` snapshot: construction rate `0.825959`, mean
+  overlapping 5-session spread `0.001097`, spread hit rate `0.508036`, and
+  median `29` nonzero names per side;
+- `adv10m_clean_core_beta_full` has the strongest raw Phase 4 diagnostic spread
+  at `0.001270`, but it carries the highest execution and shortability burden
+  among the supported variants;
+- the first pass does not yet satisfy the "both legs contribute" product
+  standard: average short-leg contribution is negative across variants, so the
+  positive spread is currently driven mainly by the long leg;
+- no transaction costs, borrow costs, turnover accounting, non-overlapping
+  backtest conversion, production claim, candidate freeze, or test-window
+  performance was computed.
+
+Interpretation:
+
+The first portfolio-construction pass shows that the signal can be turned into
+a mechanically beta-matched long-short book on most validation sessions. The
+remaining hard problem is not "can we solve beta"; it is "can we keep enough
+high-alpha names while satisfying beta, borrow, cost, turnover realism, and a
+short book that actually contributes." Phase 5 should therefore convert these
+overlapping diagnostics into a standard backtest packet and charge realistic
+costs before treating any spread as an economic result.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4
+```
+
+Generated artifacts:
+
+- `phase4_beta_matched_positions_validation.csv.gz`;
+- `phase4_portfolio_daily_diagnostics_validation.csv`;
+- `phase4_skipped_sessions_validation.csv`;
+- `phase4_portfolio_summary_validation.csv`;
+- `phase4_beta_matched_portfolio_memo.md`;
+- `phase4_beta_matched_portfolio_rollup.json`.
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -917,7 +982,8 @@ Near-term deliverables:
   beta builder
 - validation-only transparent signal diagnostics: generated with the
   `2026-04-18` Phase 3 baseline signal builder
-- first beta-matched long-short baseline
+- first beta-matched long-short baseline: generated with the `2026-04-18`
+  Phase 4 portfolio constructor
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
