@@ -25,6 +25,8 @@
     "phase4k_app": "stockmachine.apps.run_pure_alpha_phase4k",
     "phase4l_app": "stockmachine.apps.run_pure_alpha_phase4l",
     "phase4m_app": "stockmachine.apps.run_pure_alpha_phase4m",
+    "phase4n_app": "stockmachine.apps.run_pure_alpha_phase4n",
+    "phase4o_app": "stockmachine.apps.run_pure_alpha_phase4o",
     "robustness_app": "stockmachine.apps.run_robustness_suite"
   }
 }

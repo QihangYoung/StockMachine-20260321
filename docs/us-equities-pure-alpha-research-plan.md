@@ -2287,6 +2287,128 @@ $env:PYTHONPATH='src'
 python -m stockmachine.apps.run_pure_alpha_phase4m
 ```
 
+## Phase 4N: PCA-Ridge Standalone Short Selector
+
+Goal:
+
+Test route 1 from the Phase 4M feature-correlation/PCA diagnosis: replace the
+raw, highly correlated Ridge inputs with a small number of principal components
+before fitting Ridge.
+
+Scope:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4n`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4n_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4n_pca_ridge_standalone_short_20260418`;
+- short universe: `adv30m_clean_core_beta_full` only;
+- target: `cs_demeaned_beta_residual`;
+- PCA inputs: the same 8 Phase 4M Ridge features;
+- PCA is fit inside each rolling train window only, then applied to the
+  prediction block;
+- default PCA components: `PC1`, `PC2`, and `PC3`;
+- Ridge alpha: `10.0`;
+- train/predict protocol: rolling validation-only Ridge with `252` initial
+  train sessions, `5` session h5 label embargo, and `126` session prediction
+  blocks;
+- primary evaluation: standalone top30 short selector performance;
+- no beta-matched portfolio diagnostics or test-window performance was
+  computed.
+
+Result:
+
+| Selector | PCs | Mean Short CS Contribution | Hit Rate | Negative Share | RankIC |
+|---|---:|---:|---:|---:|---:|
+| `short_core_plus_overextension` | `0` | `0.001797` | `0.5287` | `0.5254` | `-0.0258` |
+| `pca_ridge_pc3` | `3` | `0.001262` | `0.5250` | `0.5163` | `-0.0207` |
+
+Interpretation:
+
+Route 1 does not improve the standalone short selector. Compressing the 8 raw
+features into the first 3 train-window PCs reduces feature collinearity, but it
+also discards or blurs the transparent overextension structure that currently
+works best. The PCA-Ridge selector is also weaker than the prior raw-feature
+Ridge result from Phase 4M on the same `adv30m` universe (`0.001338` mean short
+CS contribution). This makes PCA compression useful as a diagnostic, but not as
+a promotion candidate.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4n
+```
+
+## Phase 4O: Long Selector Refresh
+
+Goal:
+
+Reassess long-side selector strength before moving toward cost-aware backtests,
+with special attention to whether a narrower `top500` long universe improves the
+long book.
+
+Scope:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4o`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4o_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4o_long_selector_refresh_20260418`;
+- long universes: `top500_clean_core_beta_full` and
+  `top1000_clean_core_beta_full`;
+- short universe for portfolio recheck: `adv30m_clean_core_beta_full`;
+- short selector: `short_core_plus_overextension`;
+- target: `cs_demeaned_beta_residual`;
+- primary diagnostic: standalone top30 long selector contribution;
+- secondary diagnostic: beta-matched portfolio recheck with the same transparent
+  short selector;
+- no transaction costs, borrow costs, turnover model, or test-window
+  performance was computed.
+
+Standalone long-selector result:
+
+| Variant | Selector | Long CS Contribution | Hit Rate | Positive Share | RankIC |
+|---|---|---:|---:|---:|---:|
+| `top1000_clean_core_beta_full` | `long_reversal_beta_penalty` | `0.000772` | `52.88%` | `49.94%` | `0.0160` |
+| `top1000_clean_core_beta_full` | `reversal_5d` | `0.000639` | `51.33%` | `49.73%` | `0.0119` |
+| `top500_clean_core_beta_full` | `long_reversal_beta_penalty` | `0.000436` | `52.21%` | `50.42%` | `0.0161` |
+| `top500_clean_core_beta_full` | `reversal_5d` | `0.000222` | `52.58%` | `50.12%` | `0.0119` |
+
+Beta-matched recheck with `adv30m` short:
+
+| Long Universe | Long Selector | Constructed | CS Spread | Long CS | Short CS | Hit Rate |
+|---|---|---:|---:|---:|---:|---:|
+| `top1000` | `reversal_5d` | `1172` | `0.001684` | `0.000440` | `0.001244` | `51.54%` |
+| `top1000` | `long_reversal_beta_penalty` | `1155` | `0.001537` | `0.000390` | `0.001148` | `51.69%` |
+| `top500` | `long_reversal_beta_penalty` | `1081` | `0.001365` | `0.000257` | `0.001108` | `51.90%` |
+| `top500` | `reversal_5d` | `1124` | `0.001271` | `0.000141` | `0.001130` | `51.33%` |
+
+Interpretation:
+
+`top500` does not improve the long side in this validation pass. The best
+standalone long selector is `top1000 + long_reversal_beta_penalty`, but its
+portfolio recheck does not beat the current `top1000 + reversal_5d` baseline.
+The long book remains the weaker side of the transparent portfolio: even in the
+best current beta-matched candidate, long CS contribution is only about
+`4.40 bps / 5 sessions`, while the short side contributes about
+`12.44 bps / 5 sessions`.
+
+Research implication:
+
+The current transparent long-side feature set is not enough to create a large
+cost buffer. Reversal remains the best practical long selector for now, but
+future long-side improvement likely requires new information rather than a
+smaller `top500` universe or simple recombinations of existing price-action
+features.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4o
+```
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -2527,6 +2649,12 @@ Near-term deliverables:
   overextension standalone and therefore is not promoted; common-session
   portfolio value for `top1000` long plus `adv30m` short is kept as secondary
   diagnostic evidence only
+- PCA-Ridge standalone short selector: generated with the `2026-04-18` Phase
+  4N diagnostic builder, showing that `PC1~PC3` compression on `adv30m` does
+  not improve standalone short selection
+- long selector refresh: generated with the `2026-04-18` Phase 4O diagnostic
+  builder, showing that `top500` does not improve the long side and that
+  `top1000 + reversal_5d` remains the best transparent beta-matched long setup
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
