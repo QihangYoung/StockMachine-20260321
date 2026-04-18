@@ -1627,6 +1627,449 @@ Generated artifacts:
 - `phase4g_robust_feature_utility_memo.md`;
 - `phase4g_robust_feature_utility_rollup.json`.
 
+## Phase 4H: Universe Prior Strength Study
+
+Goal:
+
+Test whether the current short-book difficulty is partly caused by the selected
+universe being too strong. The current `top1000_clean_core_beta_full` validation
+sample has a positive 5-session beta-residual prior:
+
+- mean residual: `0.000579`;
+- median residual: `0.000382`;
+- `10/90` trimmed residual mean: `0.000345`;
+- `5/95` winsorized residual mean: `0.000331`.
+
+If the universe prior is positive, then the short book is not merely trying to
+find stocks with negative residual returns. It is trying to overcome a positive
+drift inside a high-liquidity, survivorship-prone stock pool.
+
+Primary hypothesis:
+
+`top1000` is too strong for short selection. A broader or differently filtered
+tradable universe may have a flatter residual prior and more reliable residual
+loser candidates, even if the final product still needs to be capacity-aware.
+
+Secondary hypotheses:
+
+- current top1000 membership may embed survivorship and quality bias;
+- high-liquidity names may have stronger institutional support and cleaner
+  financing than broader stocks;
+- the long side benefits from the top1000 prior, while the short side is
+  structurally disadvantaged;
+- the best short universe may need to be broader or asymmetrically filtered
+  relative to the long universe.
+
+Experiment design:
+
+1. Build validation-only universe-prior panels for existing Phase 1 variants.
+2. Compute unconditional residual-return priors for each variant:
+   - `forward_return_5d`;
+   - `forward_market_relative_return_5d`;
+   - `forward_beta_residual_return_5d`;
+   - median;
+   - `10/90` trimmed mean;
+   - `5/95` winsorized mean;
+   - negative residual share;
+   - bottom-20% residual-loser share;
+   - top-20% residual-winner share;
+   - daily cross-sectional residual mean and median.
+3. Split priors by:
+   - calendar year;
+   - market-up and market-down 5-session benchmark windows;
+   - liquidity bucket;
+   - beta bucket;
+   - price bucket;
+   - sector / industry if metadata is available.
+4. Re-run Phase 4G robust feature utility on each feasible universe variant.
+5. Compare whether the first- and second-tier short features remain useful
+   when the universe prior changes.
+
+Universe variants to test first:
+
+- `top500_clean_core_beta_full`;
+- `top1000_clean_core_beta_full`;
+- `adv50m_clean_core_beta_full`;
+- `adv30m_clean_core_beta_full`;
+- `adv20m_clean_core_beta_full`;
+- `adv10m_clean_core_beta_full` as an expansion diagnostic only;
+- available top1500/top2000/top3000 proxies only if membership coverage is
+  timestamp-safe enough for validation mechanics.
+
+Asymmetric universe diagnostic:
+
+Also test a research-only long/short split:
+
+- long candidates: current high-quality top1000 or stricter subset;
+- short candidates: broader `adv20m` / `adv10m` clean core, with stronger
+  borrow and liquidity constraints.
+
+This is not a product decision yet. It is a diagnostic to see whether short
+alpha is being suppressed by the current universe prior.
+
+Primary outputs:
+
+- `phase4h_universe_prior_summary_validation.csv`;
+- `phase4h_universe_prior_by_year_validation.csv`;
+- `phase4h_universe_prior_by_regime_validation.csv`;
+- `phase4h_universe_prior_by_bucket_validation.csv`;
+- `phase4h_feature_utility_by_universe_validation.csv`;
+- `phase4h_universe_prior_memo.md`;
+- `phase4h_universe_prior_rollup.json`.
+
+Decision criteria:
+
+- If broader universes reduce median / trimmed beta-residual prior toward `0`
+  and improve robust short-feature utility without unacceptable liquidity or
+  borrow risk, the short side should not be constrained to top1000.
+- If all feasible universes have similarly positive residual priors, the
+  bottleneck is more likely residual definition, feature quality, or borrow /
+  shortability rather than universe breadth.
+- If broader universes improve short diagnostics but harm long diagnostics, use
+  asymmetric long/short candidate pools.
+
+Guardrails:
+
+- no test-window performance;
+- no final universe selection based on test data;
+- no expansion into illiquid or hard-to-borrow names without explicit capacity
+  and borrow stress;
+- universe comparison must report tradability counts, median dollar volume,
+  single-name participation at `500,000 USD`, and missing-data rates.
+
+Phase 4H universe-prior status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4h`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4h_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4h_universe_prior_strength_20260418`;
+- panel rows loaded: `4,572,955`;
+- variants tested: `top500`, `top1000`, `adv50m`, `adv30m`, `adv20m`,
+  `adv10m` clean-core beta-full variants;
+- universe-prior summary rows: `6`;
+- year rows: `36`;
+- regime rows: `18`;
+- bucket rows: `240`;
+- feature-utility rows: `114`;
+- no test-window performance was computed.
+
+Universe-prior result:
+
+`top1000_clean_core_beta_full` has the strongest positive residual prior among
+the tested variants:
+
+| Variant | Median Residual | Trimmed Mean | Winsor Mean | Daily Mean Positive Share |
+|---|---:|---:|---:|---:|
+| `top500_clean_core_beta_full` | `0.000325` | `0.000236` | `0.000102` | `50.52%` |
+| `adv50m_clean_core_beta_full` | `0.000342` | `0.000243` | `0.000107` | `50.59%` |
+| `adv30m_clean_core_beta_full` | `0.000389` | `0.000300` | `0.000195` | `52.58%` |
+| `adv20m_clean_core_beta_full` | `0.000383` | `0.000308` | `0.000218` | `52.06%` |
+| `adv10m_clean_core_beta_full` | `0.000396` | `0.000345` | `0.000289` | `53.02%` |
+| `top1000_clean_core_beta_full` | `0.000382` | `0.000345` | `0.000331` | `53.47%` |
+
+Interpretation:
+
+The hypothesis is partly supported. The short side is operating against a
+positive residual prior, and `top1000` is the most positively biased by
+winsorized mean and daily positive-prior share. However, the pattern is not a
+simple "broader is always weaker" story. `adv10m` remains almost as positive on
+trimmed mean, while stricter `top500` and `adv50m` have flatter priors. This
+suggests that the current top1000 construction, not just breadth, may be
+embedding a quality / survivorship / liquidity-strength bias.
+
+Feature utility by universe:
+
+The first-tier robust short features transfer across universes and are often
+cleaner outside `top1000`:
+
+- `momentum_20d` is a `1_robust_short_candidate` in all six variants;
+- `exhausted_winner_20_5` is first-tier in `top500`, `adv50m`, `adv30m`, and
+  `adv20m`, but only second-tier in `top1000` and `adv10m`;
+- `residual_overextension_20_5` is first-tier in `top500`, `adv50m`, `adv30m`,
+  `adv20m`, and `adv10m`, but only second-tier in `top1000`;
+- `beta_residual_momentum_20d_z` is first-tier in all variants except it is
+  below the top displayed `top1000` group because `top1000` has more right-tail
+  pressure.
+
+The strongest first-pass robust short utility appears in `top500`, `adv50m`,
+`adv30m`, and `adv20m`, not in `top1000`.
+
+Phase 4H conclusion:
+
+Do not assume `top1000` is the best short-side universe. For short selection,
+the next constructor should compare at least `top500`, `adv50m`, `adv30m`, and
+`adv20m` against `top1000`, and should consider asymmetric long/short candidate
+pools. The result does not yet justify expanding to weak-liquidity names; it
+does justify not treating top1000 as a settled choice.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4h
+```
+
+Generated artifacts:
+
+- `phase4h_universe_prior_summary_validation.csv`;
+- `phase4h_universe_prior_by_year_validation.csv`;
+- `phase4h_universe_prior_by_regime_validation.csv`;
+- `phase4h_universe_prior_by_bucket_validation.csv`;
+- `phase4h_feature_utility_by_universe_validation.csv`;
+- `phase4h_universe_prior_memo.md`;
+- `phase4h_universe_prior_rollup.json`.
+
+## Phase 4I: Multi-Factor Residual Target Study
+
+Goal:
+
+Test whether the current `forward_beta_residual_return_5d` target is too
+coarse because it removes only market beta:
+
+```text
+forward_beta_residual_return_5d
+= forward_return_5d - beta * benchmark_forward_return_5d
+```
+
+This is not a true multi-factor idiosyncratic residual. It can still contain
+sector, size, quality, momentum, liquidity, volatility, and other common-factor
+effects. If those effects remain inside the target, a short selector may appear
+to predict residual losers while actually loading on unrewarded or unstable
+style risk.
+
+Primary hypothesis:
+
+The short side looks weak partly because the target is not a clean
+multi-factor residual. The current short signals may be predicting a mixture of
+idiosyncratic reversal, factor reversal, sector drift, and beta-estimation
+error.
+
+Experiment design:
+
+Build alternative validation-only residual targets using only timestamp-safe
+features available at selection time.
+
+Target A: current beta residual baseline
+
+```text
+y_beta = forward_return_5d - beta * benchmark_forward_return_5d
+```
+
+Target B: daily cross-sectional demeaned beta residual
+
+```text
+y_cs_beta = y_beta - cross_section_mean(y_beta)
+```
+
+Purpose:
+
+Remove the positive daily universe prior without adding new factors.
+
+Target C: sector-neutral beta residual
+
+```text
+y_sector = y_beta - sector_day_mean(y_beta)
+```
+
+Purpose:
+
+Separate stock selection from sector drift. Use only sector metadata that is
+known or safely lagged for the session.
+
+Target D: style-neutral residual
+
+Run a daily cross-sectional regression:
+
+```text
+forward_return_5d
+~ beta * benchmark_forward_return_5d
++ sector dummies
++ log dollar volume / liquidity rank
++ beta
++ return_5d
++ momentum_20d
++ momentum_60d
++ volatility proxy or vol_adjusted_momentum proxy
+```
+
+The residual is:
+
+```text
+y_multifactor = forward_return_5d - fitted_forward_return_5d
+```
+
+Purpose:
+
+Remove broad market, sector, liquidity / size proxy, beta, momentum, and
+volatility-style effects before asking whether our features predict true
+stock-specific residual losers.
+
+Target E: factor-neutral residual with no signal leakage
+
+Same as Target D, but exclude any candidate selector feature being evaluated
+from the neutralization regression when possible.
+
+Purpose:
+
+Avoid accidentally neutralizing away the exact alpha feature we want to test.
+
+Minimum viable implementation:
+
+- start with Target B and Target C because they are simple and easy to audit;
+- add Target D after confirming sector and style fields are timestamp-safe;
+- compare every target against the current `y_beta` baseline using the same
+  Phase 4E / Phase 4F / Phase 4G diagnostics.
+
+Primary diagnostics:
+
+- target prior distribution:
+  - mean;
+  - median;
+  - `10/90` trimmed mean;
+  - `5/95` winsorized mean;
+  - negative residual share;
+  - bottom / top tail balance;
+- daily prior distribution:
+  - daily mean and median residual;
+  - fraction of days with positive residual prior;
+  - correlation of daily residual prior with benchmark return;
+- feature-target independence:
+  - Phase 4E NMI and permutation baseline for each target;
+- posterior shape:
+  - Phase 4F decile curves for top features;
+- robust utility:
+  - Phase 4G first- and second-tier feature rankings under each target;
+- selector transfer:
+  - whether high `momentum_20d`, high `beta_residual_momentum_20d_z`, and high
+    `vol_adjusted_momentum_20d` remain useful after multi-factor neutralization.
+
+Primary outputs:
+
+- `phase4i_residual_target_prior_summary_validation.csv`;
+- `phase4i_residual_target_daily_prior_validation.csv`;
+- `phase4i_feature_independence_by_target_validation.csv`;
+- `phase4i_robust_feature_utility_by_target_validation.csv`;
+- `phase4i_target_comparison_memo.md`;
+- `phase4i_residual_target_rollup.json`.
+
+Decision criteria:
+
+- If the positive residual prior disappears under cross-sectional or
+  multi-factor residuals, then current short-book weakness is partly a target
+  definition problem.
+- If Phase 4G first-tier features remain robust under multi-factor residuals,
+  they are stronger short-alpha candidates.
+- If first-tier features collapse after neutralization, they were likely
+  capturing factor reversal or universe drift rather than pure stock-specific
+  alpha.
+- If multi-factor residuals improve short diagnostics but reduce long-side
+  signal quality, long and short targets may need separate treatment.
+
+Guardrails:
+
+- no future features inside residual neutralization;
+- no target construction using test-window data;
+- no feature should be neutralized with information unavailable at selection
+  time;
+- every target must record exact regression fields, missing-data treatment,
+  winsorization, and minimum cross-sectional sample sizes;
+- test lockbox remains closed.
+
+Phase 4I residual-target status as of `2026-04-18`:
+
+- repeatable app: `stockmachine.apps.run_pure_alpha_phase4i`;
+- project entrypoint: `configs/strategy_projects/us_equities_pure_alpha_h5.json`
+  now includes `phase4i_app`;
+- validation-only artifact root:
+  `artifacts/strategy_projects/us_equities_pure_alpha_h5/research/phase4i_residual_target_study_20260418`;
+- variant tested: `top1000_clean_core_beta_full`;
+- rows loaded: `918,968`;
+- residual targets tested:
+  - `beta_residual`;
+  - `cs_demeaned_beta_residual`;
+  - `risk_neutral_beta_residual`;
+  - `style_neutral_beta_residual`;
+- feature-independence rows: `76`;
+- robust feature-utility rows: `76`;
+- no test-window performance was computed.
+
+Residual target priors:
+
+| Target | Mean | Median | Trimmed Mean | Winsor Mean | Negative Share |
+|---|---:|---:|---:|---:|---:|
+| `beta_residual` | `0.000579` | `0.000382` | `0.000345` | `0.000331` | `49.36%` |
+| `cs_demeaned_beta_residual` | `-0.000000` | `-0.000152` | `-0.000194` | `-0.000227` | `50.25%` |
+| `risk_neutral_beta_residual` | `0.000000` | `-0.000142` | `-0.000197` | `-0.000220` | `50.25%` |
+| `style_neutral_beta_residual` | `0.000000` | `-0.000084` | `-0.000163` | `-0.000198` | `50.16%` |
+
+Interpretation:
+
+The target-definition hypothesis is supported. The positive residual prior
+largely disappears after daily cross-sectional demeaning and remains gone after
+simple risk/style neutralization. This means part of the short-book difficulty
+comes from evaluating selectors against a beta-only residual target that still
+contains a positive daily universe drift.
+
+Feature transfer across targets:
+
+The core overextension / high-momentum short features survive the cleaner
+targets:
+
+- under `cs_demeaned_beta_residual`, `momentum_20d`,
+  `momentum_20d_z`, and `beta_residual_momentum_20d_z` remain first-tier
+  robust short candidates;
+- under `risk_neutral_beta_residual`, overextension and high-momentum features
+  remain top-ranked, though most are labeled second-tier because right-tail
+  risk remains present;
+- under `style_neutral_beta_residual`, high-momentum features weaken because
+  the target deliberately neutralizes return, momentum, residual momentum, and
+  volatility-adjusted momentum. This is expected and should be treated as a
+  transfer diagnostic, not proof that momentum exhaustion has no alpha.
+
+Top robust features by target:
+
+- `beta_residual`: `momentum_20d`, `exhausted_winner_20_5`,
+  `residual_overextension_20_5`, `beta_z`, `momentum_20d_z`;
+- `cs_demeaned_beta_residual`: `exhausted_winner_20_5`,
+  `residual_overextension_20_5`, `momentum_20d`, `momentum_20d_z`,
+  `beta_residual_momentum_20d_z`;
+- `risk_neutral_beta_residual`: `exhausted_winner_20_5`,
+  `residual_overextension_20_5`, `momentum_20d`,
+  `beta_residual_momentum_20d`, `beta_residual_momentum_20d_z`;
+- `style_neutral_beta_residual`: `lagged_close_log`, `liquidity_rank`,
+  `liquidity_rank_z`, `fragile_winner_proxy`, `return_5d_z`,
+  `exhausted_winner_20_5`, `momentum_20d`, `beta_z`.
+
+Phase 4I conclusion:
+
+The next short-side selector should not be evaluated only against the current
+beta residual. At minimum, Phase 4 construction should report both:
+
+- absolute `beta_residual` contribution;
+- relative / cross-section-demeaned residual contribution.
+
+Before a final selector is frozen, the team should add timestamp-safe sector
+metadata and rerun a sector-neutral target. If the momentum / overextension
+family survives daily demeaning, risk neutralization, and sector-neutral
+residuals, it becomes a much stronger pure-alpha short candidate.
+
+Repeatable command:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m stockmachine.apps.run_pure_alpha_phase4i
+```
+
+Generated artifacts:
+
+- `phase4i_residual_target_prior_summary_validation.csv`;
+- `phase4i_residual_target_daily_prior_validation.csv`;
+- `phase4i_feature_independence_by_target_validation.csv`;
+- `phase4i_robust_feature_utility_by_target_validation.csv`;
+- `phase4i_target_comparison_memo.md`;
+- `phase4i_residual_target_rollup.json`.
+
 ## Phase 5: Backtest And Artifact Contract
 
 Goal:
@@ -1846,6 +2289,11 @@ Near-term deliverables:
   diagnostic builder, showing that high momentum / overextension features are
   cleaner short-side candidates than standalone beta after median, trimmed
   mean, and right-tail checks
+- universe-prior strength study: next diagnostic Phase 4H, designed to test
+  whether `top1000` is structurally too strong for short selection
+- multi-factor residual target study: next diagnostic Phase 4I, designed to
+  test whether beta-only residuals leave too much sector / style / liquidity
+  drift in the target
 - robustness-compatible artifact manifest
 - validation-only portfolio baseline memo
 
