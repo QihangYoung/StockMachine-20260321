@@ -33,6 +33,9 @@
     "phase6d_app": "stockmachine.apps.run_pure_alpha_phase6d",
     "phase6e_app": "stockmachine.apps.run_pure_alpha_phase6e",
     "phase6f_app": "stockmachine.apps.run_pure_alpha_phase6f",
+    "phase6g_app": "stockmachine.apps.run_pure_alpha_phase6g",
+    "phase6h_app": "stockmachine.apps.run_pure_alpha_phase6h",
+    "phase6i_app": "stockmachine.apps.run_pure_alpha_phase6i",
     "robustness_app": "stockmachine.apps.run_robustness_suite"
   }
 }
