@@ -41,6 +41,14 @@
     "phase6m_app": "stockmachine.apps.run_pure_alpha_phase6m",
     "phase6n_app": "stockmachine.apps.run_pure_alpha_phase6n",
     "phase6p_app": "stockmachine.apps.run_pure_alpha_phase6p",
+    "phase6q_app": "stockmachine.apps.run_pure_alpha_phase6q",
+    "phase6r_app": "stockmachine.apps.run_pure_alpha_phase6r",
+    "phase6t_app": "stockmachine.apps.run_pure_alpha_phase6t",
+    "phase6u_app": "stockmachine.apps.run_pure_alpha_phase6u",
+    "phase6v_app": "stockmachine.apps.run_pure_alpha_phase6v",
+    "phase6w_app": "stockmachine.apps.run_pure_alpha_phase6w",
+    "phase6x_app": "stockmachine.apps.run_pure_alpha_phase6x",
+    "phase6y_app": "stockmachine.apps.run_pure_alpha_phase6y",
     "robustness_app": "stockmachine.apps.run_robustness_suite"
   }
 }
