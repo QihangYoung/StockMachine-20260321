@@ -24,7 +24,7 @@ Thumbs.db
 .vscode/
 
 # Local data and runtime files
-data/
+/data/
 artifacts/
 logs/
 *.sqlite3
