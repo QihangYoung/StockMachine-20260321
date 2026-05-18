@@ -25,7 +25,7 @@ Thumbs.db
 
 # Local data and runtime files
 /data/
-artifacts/
-logs/
+/artifacts/
+/logs/
 *.sqlite3
 *.db
